@@ -290,6 +290,7 @@ export const api = {
       openrouter_model: string;
       max_tags: number;
       hotkey_mode: "toggle" | "hold";
+      auto_stop_ms: number;
       export_path: string;
       auto_export_enabled: boolean;
     }>,

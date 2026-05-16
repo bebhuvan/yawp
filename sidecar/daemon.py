@@ -54,7 +54,10 @@ HOTKEY_PASTE = os.environ.get("VOICE_HOTKEY_PASTE", "<ctrl>+<alt>+v")
 HOLD_KEY_NOTES = os.environ.get("VOICE_HOLD_KEY_NOTES", "<f9>")
 HOLD_KEY_PASTE = os.environ.get("VOICE_HOLD_KEY_PASTE", "<f10>")
 
-AUTO_STOP_MS = int(os.environ.get("VOICE_AUTO_STOP_MS", "1200"))
+_AUTO_STOP_MS_ENV = os.environ.get("VOICE_AUTO_STOP_MS")
+# Live, mutable copy. Defaults to env override if set, else the sidecar's
+# settings value at startup, else 1200ms. Refreshed by reload_settings().
+AUTO_STOP_MS = int(_AUTO_STOP_MS_ENV) if _AUTO_STOP_MS_ENV else 1200
 VAD_AGGRESSIVENESS = int(os.environ.get("VOICE_VAD_AGGRESSIVENESS", "2"))
 VAD_FRAME_MS = 20
 VAD_FRAME_SAMPLES = SAMPLE_RATE * VAD_FRAME_MS // 1000
@@ -486,12 +489,25 @@ def _swap_listener(hotkey_mode: str) -> str:
 
 def reload_settings() -> str:
     """Re-read settings from the sidecar and swap the listener if the
-    activation mode changed."""
+    activation mode changed. Also refreshes AUTO_STOP_MS so silence-stop
+    changes take effect on the next recording."""
+    global AUTO_STOP_MS
     s = fetch_settings()
     mode_env = os.environ.get("VOICE_HOTKEY_MODE")
     desired = mode_env or s.get("hotkey_mode") or "toggle"
+
+    # Env var wins. Otherwise honour what the sidecar says, falling back to
+    # the previous in-memory value if the key is missing.
+    if _AUTO_STOP_MS_ENV is None and "auto_stop_ms" in s:
+        try:
+            AUTO_STOP_MS = max(0, min(10_000, int(s["auto_stop_ms"])))
+        except (TypeError, ValueError):
+            pass
+
     applied = _swap_listener(desired)
-    log.info("settings reloaded (mode=%s)", applied)
+    log.info(
+        "settings reloaded (mode=%s, auto_stop_ms=%d)", applied, AUTO_STOP_MS
+    )
     notify(f"Hotkeys reloaded — {applied} mode.")
     return applied
 
@@ -612,6 +628,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     settings = fetch_settings()
     mode_env = os.environ.get("VOICE_HOTKEY_MODE")
     hotkey_mode = mode_env or settings.get("hotkey_mode") or "toggle"
+
+    # Honour the user's silence threshold from the sidecar settings unless
+    # the env var overrides it.
+    global AUTO_STOP_MS
+    if _AUTO_STOP_MS_ENV is None and "auto_stop_ms" in settings:
+        try:
+            AUTO_STOP_MS = max(0, min(10_000, int(settings["auto_stop_ms"])))
+        except (TypeError, ValueError):
+            pass
+
     command_server = start_command_server()
 
     print("Yawp — global hotkey daemon")

@@ -267,9 +267,25 @@ export function Settings({
           <>
             <ReadonlyRow label="Notes mode" value={notesHotkey} />
             <ReadonlyRow label="Paste mode" value={pasteHotkey} />
+            <ModeRow
+              label="Stop on silence"
+              options={[
+                { value: "1200", label: "1.2 s" },
+                { value: "2500", label: "2.5 s" },
+                { value: "4000", label: "4 s" },
+                { value: "0", label: "Off" },
+              ]}
+              value={String(s.auto_stop_ms)}
+              onChange={(v) => update({ auto_stop_ms: parseInt(v, 10) })}
+              disabled={saving}
+            />
             <Help>
-              Tap a hotkey to start recording. It auto-stops after a stretch
-              of silence (~1.2 s), or tap again to stop manually.
+              How long Yawp waits before deciding you've finished a thought.
+              Pick a longer window if you pause mid-narration to think.
+              <span className="ml-1" style={{ color: "var(--color-ink-quiet)" }}>
+                Off
+              </span>{" "}
+              means recording continues until you tap the hotkey again.
             </Help>
           </>
         ) : (

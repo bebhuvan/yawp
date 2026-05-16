@@ -314,6 +314,7 @@ class SettingsUpdate(BaseModel):
     openrouter_model: Optional[str] = None
     max_tags: Optional[int] = Field(default=None, ge=0, le=12)
     hotkey_mode: Optional[str] = Field(default=None, pattern="^(toggle|hold)$")
+    auto_stop_ms: Optional[int] = Field(default=None, ge=0, le=10_000)
     export_path: Optional[str] = None
     auto_export_enabled: Optional[bool] = None
 
@@ -345,9 +346,9 @@ def put_settings(req: SettingsUpdate) -> dict:
     incoming = {k: v for k, v in req.model_dump(exclude_none=True).items()}
     # Convention: an empty string clears the api key; missing → no change.
     settings.update(incoming)
-    # If hotkey_mode changed, poke the daemon so it switches modes without a
-    # restart. Best-effort — the daemon may not be running.
-    if "hotkey_mode" in incoming:
+    # If anything the daemon honors changed, poke it so the change is live
+    # without a restart. Best-effort — the daemon may not be running.
+    if "hotkey_mode" in incoming or "auto_stop_ms" in incoming:
         _poke_daemon_reload()
     return settings.get().to_safe_dict()
 

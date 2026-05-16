@@ -51,6 +51,11 @@ class Settings:
     # Daemon hotkey mode: "toggle" or "hold"
     hotkey_mode: str = "toggle"
 
+    # Auto-stop silence threshold (ms) for toggle mode. 0 disables auto-stop
+    # entirely — recording continues until you tap the hotkey again. Range
+    # is enforced at the API layer.
+    auto_stop_ms: int = 1200
+
     # Auto-extract action items on every new transcript (requires OpenRouter).
     extract_todos_enabled: bool = False
 

@@ -30,6 +30,7 @@ export interface AppSettings {
   openrouter_api_key_set: boolean;
   max_tags: number;
   hotkey_mode: "toggle" | "hold";
+  auto_stop_ms: number;
   export_path: string;
   auto_export_enabled: boolean;
 }

@@ -86,13 +86,28 @@ export function useRecorder({
     if (state !== "idle") return;
     log.info("start: requesting microphone");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      // Prefer the cleaner constraints (AEC + noise suppression + AGC) but
+      // fall back to plain audio if any of them isn't supported on this
+      // device — common on PipeWire/Wayland headsets that report
+      // OverconstrainedError instead of just ignoring the hint.
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (e) {
+        const name = (e as { name?: string })?.name;
+        if (name === "OverconstrainedError" || name === "NotReadableError") {
+          log.warn("constraint rejected — retrying with plain audio", name);
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } else {
+          throw e;
+        }
+      }
       const audioCtx = new (window.AudioContext ||
         // @ts-expect-error vendor-prefixed fallback
         window.webkitAudioContext)();
@@ -182,11 +197,7 @@ export function useRecorder({
     } catch (e: unknown) {
       const err = e as { name?: string; message?: string };
       log.error("getUserMedia failed", err?.name, err?.message);
-      setError(
-        err?.name === "NotAllowedError"
-          ? "Microphone permission denied"
-          : (err?.message ?? "Could not start recording"),
-      );
+      setError(friendlyMicError(err));
       cleanup();
       setState("idle");
     }
@@ -238,6 +249,23 @@ export function useRecorder({
   useEffect(() => () => cleanup(), [cleanup]);
 
   return { state, error, partial, level, start, stop, cancel };
+}
+
+function friendlyMicError(err: { name?: string; message?: string }): string {
+  switch (err?.name) {
+    case "NotAllowedError":
+      return "Microphone access is blocked. Allow it in pavucontrol / system audio settings.";
+    case "NotFoundError":
+      return "No microphone found. Plug one in or pick a device in pavucontrol.";
+    case "NotReadableError":
+      return "Microphone is in use by another app. Close it and try again.";
+    case "OverconstrainedError":
+      return "Microphone couldn't open with the requested audio settings.";
+    case "SecurityError":
+      return "Microphone blocked by the browser/webview security policy.";
+    default:
+      return err?.message?.trim() || "Could not start recording.";
+  }
 }
 
 function rms(samples: Float32Array): number {
