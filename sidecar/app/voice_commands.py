@@ -107,7 +107,13 @@ def apply(text: str) -> str:
     # Pass 4: tidy whitespace + spacing around punctuation
     out = re.sub(r" {2,}", " ", out)
     out = re.sub(r"([,.;:?!])(\S)", r"\1 \2", out)
-    out = re.sub(r"\s+\n", "\n", out)
+    # Strip space immediately after an opening quote or paren so
+    # `"open quote hello"` → `"hello"`, not `" hello"`.
+    out = re.sub(r'([("])\s+', r"\1", out)
+    # Strip only horizontal whitespace before a newline. Using `\s+\n` here
+    # would also eat one of the two newlines in `\n\n` and collapse the
+    # paragraph break.
+    out = re.sub(r"[ \t]+\n", "\n", out)
     return out.strip()
 
 

@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+# The sidecar runs from sidecar/ with `app` as the top-level package
+# (see sidecar/run.py). Mirror that for tests so production imports work
+# unmodified.
+pythonpath = ["sidecar"]
+testpaths = ["sidecar/tests"]
+addopts = "-q --tb=short"

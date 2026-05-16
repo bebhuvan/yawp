@@ -1,75 +1,79 @@
 # Yawp
 
-> *"I sound my barbaric yawp over the roofs of the world."* — Walt Whitman, *Song of Myself*
+> *"I sound my barbaric yawp over the roofs of the world."* — Walt Whitman
 
-Yawp is a local-first voice dictation app. Hit a global hotkey, talk, and the
-transcript appears either as a note in the library or typed directly into the
-window where your cursor is. All transcription happens on this machine.
-
-* **Transcription**: [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-  with the `base.en` model by default. Override via `VOICE_MODEL`.
-* **Storage**: SQLite at `~/.voice/notes.db`. Audio at `~/.voice/audio/`.
-* **Cleanup**: Tier 1 regex polish (default on) and an optional
-  [LanguageTool](https://languagetool.org/) grammar pass.
-* **Polish**: optional conservative copy-editing via free
-  [OpenRouter](https://openrouter.ai/) models (GPT-OSS, Nemotron, DeepSeek,
-  Gemma, etc.).
-* **Search**: SQLite FTS5 over title + transcript + tags.
-* **Two recording modes**: in-app (save to notes) or global hotkey daemon
-  (auto-paste at cursor anywhere on the system).
-
----
-
-## Architecture
-
-Three processes, each replaceable in isolation:
+**Local-first voice dictation for Linux.** Press a hotkey, talk, and the
+transcript appears wherever your cursor is — terminal, editor, browser, chat.
+Every byte of audio stays on your machine.
 
 ```
-+---------------------+        +-----------------------+
-|  Tauri desktop      | <----> |  Python ASR sidecar   |
-|  (React + Tauri 2)  |  HTTP  |  (FastAPI on 17893)   |
-|  - notes library    |  WSS   |  - faster-whisper     |
-|  - record + display |        |  - SQLite             |
-|  - settings UI      |        |  - cleanup + tagging  |
-+---------------------+        |  - OpenRouter polish  |
-                               |  - grammar (Java)     |
-+---------------------+        +-----------------------+
-|  Hotkey daemon      | -----> |   (same sidecar)      |
-|  (Python + pynput)  |  HTTP  |                       |
-|  - global hotkeys   |        |                       |
-|  - sounddevice      |        |                       |
-|  - xdotool paste    |        |                       |
-+---------------------+        +-----------------------+
-```
-
-Key files:
-
-```
-voice-app/                 — Tauri + React + TypeScript app shell
-  src/                       UI components (Editorial Warm aesthetic)
-  src-tauri/                 Rust + Tauri config; webview permission grant
-                             for media in WebKitGTK lives here
-sidecar/
-  app/main.py                FastAPI endpoints (health, transcribe, notes,
-                             search, polish, grammar, stream WebSocket)
-  app/backends/whisper.py    Pluggable ASR; faster-whisper backend
-  app/cleanup.py             Tier 1 regex polish
-  app/tagging.py             Rule-based + OpenRouter tag extraction
-  app/openrouter.py          OpenRouter chat client
-  app/grammar.py             LanguageTool wrapper (Tier 2)
-  app/voice_commands.py      "period"/"new paragraph" → punctuation
-  app/db.py                  SQLite + FTS5
-  app/settings.py            ~/.voice/settings.json
-  daemon.py                  Global hotkey daemon (toggle / hold-to-talk)
-tools/make_icon.py         Regenerates the icon set
-start.sh                   Dev launcher
+                Ctrl + Alt + V        ┌──────────────────────────────┐
+   ─────────────────────────────────► │  any text input on your OS   │
+   "let's grab lunch tomorrow"        │                              │
+                                      │  let's grab lunch tomorrow▌  │
+                                      └──────────────────────────────┘
 ```
 
 ---
 
-## Quick start
+## Why this exists
 
-### Prerequisites
+If you write or code with your voice, the Linux options today are thin:
+
+| | Cloud dictation (Otter, Whisper API, Google Voice) | Manual workflow (open Whisper, paste) | **Yawp** |
+|---|---|---|---|
+| Privacy | Audio leaves your machine | — | All-local |
+| Latency | Network roundtrip | Manual | Hotkey → text |
+| Works in any app | Often no | Manual paste | Yes (xdotool/wtype) |
+| Linux-native | Patchy | Yes | Yes |
+
+It's roughly the experience of `Fn-Fn` dictation on macOS, but you own every byte
+and it works inside any input on the system, including SSH terminals and code editors.
+
+## What you get
+
+- **Two hotkeys.** `Ctrl+Alt+V` types into the focused window. `Ctrl+Alt+N` saves
+  a note in the library. Both also available as hold-to-talk.
+- **A real notes library.** Searchable (SQLite FTS5), editable, tag-able,
+  optionally action-item-extracted, exportable to Markdown.
+- **Editorial UI.** Serif typography, warm palette, no glass / glow / neon.
+  Designed to be a tool you want to sit with.
+- **Polish pipeline.** Three opt-in tiers: regex cleanup (default on),
+  LanguageTool grammar pass, OpenRouter copy-edit. Each replaceable in isolation.
+- **Voice commands.** "Period", "new paragraph", "scratch that", "all caps next" —
+  off by default; turn on in Settings.
+- **Live updates.** Recordings made via the global hotkey appear in the app
+  window in real time (SSE).
+- **Undo on delete.** A 6-second toast lets you bring back any note you trash.
+
+## What it doesn't do
+
+- No cloud sync or accounts.
+- No mobile build.
+- No macOS or Windows build yet. (Tauri supports both; nothing in the codebase
+  is Linux-specific except the paste tools and the WebKitGTK permission grant.
+  Contributions welcome.)
+
+## Quick install
+
+```bash
+git clone https://github.com/YOUR_USER/yawp.git
+cd yawp
+./install.sh
+```
+
+`install.sh` will:
+1. Verify Rust, Node 20+, Python 3.11+ are present.
+2. Set up the Python venv + install requirements.
+3. Install the frontend deps.
+4. Build the Tauri app (3–5 min the first time; Rust is slow).
+5. Install it (`.deb` if your uid fits in 6 digits, AppImage otherwise).
+6. Write systemd user units so the sidecar + hotkey daemon autostart on login.
+
+After it finishes, search "Yawp" in your launcher, or just press `Ctrl+Alt+V`
+into any input — services are already running.
+
+### System packages (if a build step fails)
 
 ```bash
 sudo apt install -y \
@@ -78,194 +82,156 @@ sudo apt install -y \
   xdotool portaudio19-dev libportaudio2 ffmpeg
 ```
 
-Plus a Rust toolchain (`rustup`), Node 20+, Python 3.11+.
-
-### Run dev
-
-```bash
-./start.sh                  # sidecar + Vite (browser preview at :1420)
-./start.sh --tauri          # + native desktop window (first Rust compile ~3-5 min)
-./start.sh --daemon         # + global hotkey daemon
-./start.sh --daemon --tauri # everything
-```
-
-On the very first transcription, the chosen Whisper model downloads
-(~150 MB – 1.5 GB depending on size). On the first **Check grammar** click,
-LanguageTool downloads its ruleset (~200 MB) into
-`~/.cache/language_tool_python/`.
-
----
+For Wayland, add `wtype` (or `dotool`) for paste-mode reliability.
 
 ## Hotkeys
 
-Defaults — change in Settings (toggle mode) or via env vars (hold mode):
-
-| Action | Default key (toggle) | Default key (hold) |
+| Action | Toggle mode | Hold mode |
 |---|---|---|
-| Record → save as note | `Ctrl + Alt + N` | hold `F9` |
-| Record → auto-paste at cursor | `Ctrl + Alt + V` | hold `F10` |
+| Dictate → note in library | `Ctrl+Alt+N` | hold `F9` |
+| Dictate → type at cursor | `Ctrl+Alt+V` | hold `F10` |
 
-In **toggle** mode the recording stops automatically after ~1.2 s of silence
-(VAD-based) or when you press the hotkey again. In **hold** mode it stops
-the moment you release the key.
+In **toggle** mode (default), the recording stops automatically after ~1.2s
+of silence (VAD-based) or when you press the hotkey again. In **hold** mode
+it stops the moment you release the key.
 
-Override via env vars before starting the daemon:
+Switch modes in Settings — the daemon picks up the change live, no restart.
+
+## How it works
+
+Three processes. Each is independently restartable.
 
 ```
-VOICE_HOTKEY_NOTES=<ctrl>+<alt>+n   VOICE_HOTKEY_PASTE=<ctrl>+<alt>+v
-VOICE_HOLD_KEY_NOTES=<f9>           VOICE_HOLD_KEY_PASTE=<f10>
-VOICE_AUTO_STOP_MS=1200             VOICE_VAD_AGGRESSIVENESS=2
-VOICE_HOTKEY_MODE=toggle            # or 'hold'
++─────────────────────+        +───────────────────────+
+│  Tauri desktop      │ <────► │  Python ASR sidecar   │
+│  (React + Tauri 2)  │  HTTP  │  (FastAPI on 17893)   │
+│  - notes library    │  SSE   │  - faster-whisper     │
+│  - record + display │  WSS   │  - SQLite + FTS5      │
+│  - settings UI      │        │  - cleanup, tagging,  │
++─────────────────────+        │    grammar, polish    │
+                               +───────────────────────+
++─────────────────────+              ▲
+│  Hotkey daemon      │ ─────────────┘
+│  (Python + pynput)  │  HTTP
+│  - global hotkeys   │
+│  - mic capture      │
+│  - xdotool / wtype  │
++─────────────────────+
 ```
 
-The daemon must be restarted after changing the mode or any of these vars.
+- **Sidecar** does ASR (`faster-whisper`, default `base.en`), persists notes
+  to SQLite + FTS5 at `~/.voice/notes.db`, and serves the REST + SSE API.
+- **Daemon** owns global hotkeys (`pynput`), captures audio (`sounddevice`),
+  posts to the sidecar, then either saves the result as a note or types it
+  into the focused window.
+- **Tauri app** is the visible UI. Talks to the sidecar over HTTP + a single
+  SSE connection so the library updates live when the daemon records a note.
 
-### Daemon CLI
+Everything lives at `~/.voice/`:
 
-When the daemon is already running, you can control it from scripts,
-keyboard-shortcut launchers, or shell aliases:
-
-```bash
-sidecar/.venv/bin/python sidecar/daemon.py --toggle-notes
-sidecar/.venv/bin/python sidecar/daemon.py --toggle-paste
-sidecar/.venv/bin/python sidecar/daemon.py --cancel
-sidecar/.venv/bin/python sidecar/daemon.py --status
 ```
-
-These commands talk to the running daemon over `~/.voice/daemon.sock`.
-
-### Linux paste tools
-
-Paste mode picks the best available tool for the current display server:
-
-* **X11**: `xdotool`
-* **Wayland**: `wtype`, then `dotool`, then `xdotool` as a last fallback
-
-Install the relevant tool for reliable paste-anywhere behavior:
-
-```bash
-sudo apt install -y xdotool wtype
+~/.voice/
+├── notes.db          ← SQLite library + FTS5 index
+├── audio/            ← per-note WAV files
+├── settings.json     ← user settings (mirrored in the UI)
+└── daemon.sock       ← unix socket for daemon control
 ```
-
-`dotool` may also work on Wayland, but usually requires extra input-device
-permissions.
-
----
 
 ## Settings
 
 All settings persist to `~/.voice/settings.json` and are surfaced in the
-Settings page. The daemon reads them at startup.
+Settings page. Highlights:
 
-* **Transcription model** — local faster-whisper model used by the sidecar.
-  Default is `base.en` on this machine. Restart the sidecar after changing it.
-* **Auto-clean transcripts** — Tier 1 regex polish on every new transcript.
-  Removes fillers (uh / um / you know), fixes capitalization, dedupes
-  stutters, normalises whitespace. Default on.
-* **Voice commands** — interpret spoken phrases as control:
-  `"period"`, `"comma"`, `"colon"`, `"semicolon"`, `"question mark"`,
-  `"exclamation point"`, `"new line"`, `"new paragraph"`,
-  `"open quote"`, `"close quote"`, `"open paren"`, `"close paren"`.
-  Default off — enable in Settings.
-* **Live transcription** — stream audio to the sidecar while recording so the
-  recorder HUD can show partial text. Turn it off to reduce CPU use during
-  longer recordings. Final transcription still runs when you stop recording.
-* **Auto-tag** — extract up to 5 tags per note. Rule-based by default;
-  uses your chosen OpenRouter model when an API key is set.
-* **Activation mode** — toggle vs hold-to-talk. Daemon restart required.
-* **Auto-export** — when enabled with an export folder, keeps the Markdown
-  folder mirrored after note create/edit/polish/delete operations.
+- **Transcription model** — `base.en` is fast and accurate enough for daily
+  dictation on a modern laptop. `small.en` is a noticeable accuracy bump at
+  ~3× the CPU cost. `large-v3-turbo` is the highest-quality option.
+- **Auto-clean transcripts** — strips fillers (`uh`/`um`/`you know`), fixes
+  capitalization, dedupes stutters. Default on. Idempotent.
+- **Voice commands** — `"period"`, `"new paragraph"`, `"scratch that"`,
+  `"all caps next"`, etc. Off by default.
+- **Live transcription** — partial transcripts shown in the HUD while you
+  speak. Turn off to reduce CPU on long recordings.
+- **Auto-tag** — rule-based by default; uses your OpenRouter model if a key
+  is configured.
+- **Auto-export** — mirrors notes to a Markdown folder on every change.
+  Compatible with Obsidian / Bear / iA Writer.
 
-### OpenRouter
+### OpenRouter (optional)
 
-Optional. When configured, the **Polish** button lightly copy-edits a note via
-the chosen free model, and auto-tagging upgrades from rule-based to model-based.
+When configured with a free OpenRouter API key, the **Polish** button does
+a conservative copy-edit and auto-tagging upgrades from rule-based to
+model-based. Grab a free key at <https://openrouter.ai/keys>.
 
-1. Get a free key at <https://openrouter.ai/keys>.
-2. Paste it in Settings → OpenRouter → API key.
-3. Pick a model from the dropdown:
+Curated free models in Settings — all zero-cost on OpenRouter. Paste any
+other OpenRouter model ID in the "Custom model ID" field to override.
 
-| Model | Notes |
-|---|---|
-| `openai/gpt-oss-20b:free` | Fast, low-latency. **Default.** |
-| `openai/gpt-oss-120b:free` | 117B with reasoning + tool use. Higher quality. |
-| `google/gemma-4-31b-it:free` | Multimodal, balanced. |
-| `nvidia/nemotron-3-nano-30b-a3b:free` | 256K context. Agentic-tuned. |
-| `nvidia/nemotron-3-super-120b-a12b:free` | Largest Nemotron, 1M context. |
-| `z-ai/glm-4.5-air:free` | Thinking + non-thinking modes. |
-| `minimax/minimax-m2.5:free` | Tuned for office/productivity. |
-| `deepseek/deepseek-v4-flash:free` | 284B MoE, 1M context, fast inference. |
-| `inclusionai/ring-2.6-1t:free` | 1T parameters; thinking model. |
-| `arcee-ai/trinity-large-thinking:free` | Reasoning-focused. |
-| `baidu/cobuddy:free` | Code-oriented. |
+## Performance
 
-Paste any other OpenRouter model ID in the "Custom model ID" field to
-override.
-
----
-
-## Models
-
-Default is `base.en` via `faster-whisper` (int8 on CPU). Override with
-`VOICE_MODEL=...` before starting the sidecar. Recognised IDs include
-`base.en`, `small.en`, `medium.en`, `large-v3-turbo`, `distil-large-v3`,
-plus the multilingual variants without the `.en` suffix.
-
-Bigger model = usually better accuracy but slower on CPU. On this Core Ultra
-7 155U laptop, a 10 s mic benchmark ran `base.en` at ~9-11× realtime and
-`small.en` at ~3.7× realtime. `base.en` is the default because it is fast
-enough for paste-anywhere dictation on this hardware.
-
-Latency is logged per request:
+`faster-whisper` int8 on CPU. Latency is logged per request:
 
 ```
-transcribe: audio=5.91s  cpu=2.98s  rtf=2.5x  text_chars=13
+transcribe: audio=5.91s  cpu=2.98s  rtf=2.0x  text_chars=13
 ```
 
-`rtf` is "realtime factor" — larger is faster than realtime.
-
-### Benchmark ASR on this machine
-
-Use the benchmark helper before changing ASR backends or rewriting the app:
+For reference, on a 2024 Core Ultra 7 laptop, `base.en` runs at ~10×
+realtime and `small.en` at ~3.7× realtime. Your mileage will vary —
+benchmark on your hardware:
 
 ```bash
 sidecar/.venv/bin/python tools/benchmark_asr.py --record-seconds 8
 sidecar/.venv/bin/python tools/benchmark_asr.py --audio ~/sample.wav --models base.en,small.en
-sidecar/.venv/bin/python tools/benchmark_asr.py --audio ~/sample.wav --models base.en --runs 3 --csv /tmp/yawp-asr.csv
 ```
-
-The output reports audio duration, wall time, and realtime factor (`rtf`).
-Use the same sample to compare Yawp, Handy, and any Rust/Parakeet spike.
-
----
 
 ## Troubleshooting
 
-* **"Microphone permission denied"** in the Tauri window — Yawp installs
-  a WebKitGTK permission handler that auto-grants. If you still see it,
-  pulse-audio / pipewire may be blocking; check `pavucontrol` for input
-  devices.
-* **"MediaRecorder is unsupported"** — you're on an old build of WebKitGTK.
-  Yawp uses the Web Audio API + manual WAV encoding instead, so this
-  shouldn't appear. If it does, rebuild Tauri.
-* **First Polish click hangs** — first call has to download the model
-  selection on OpenRouter side. Wait ~10 s.
-* **First Check grammar click hangs** — LanguageTool downloads ~200 MB of
-  language rules. Wait ~30–60 s once; subsequent calls are <500 ms.
-* **Hotkeys don't work** — daemon needs a running X11 session (Wayland
-  global-hotkey support varies). Check `echo $XDG_SESSION_TYPE`.
-* **Paste mode doesn't type on Wayland** — install `wtype` or `dotool`.
-* **Sidecar not running** error toast — start it: `sidecar/.venv/bin/python sidecar/run.py`.
+| Symptom | Cause / fix |
+|---|---|
+| **Hotkeys don't work** | Daemon needs an active graphical session. Check `systemctl --user status yawp-daemon`. |
+| **Paste mode doesn't type** on Wayland | Install `wtype` or `dotool`: `sudo apt install wtype` |
+| **"Couldn't reach the transcription service"** | Sidecar isn't running. `systemctl --user restart yawp-sidecar` |
+| **`.deb` install fails with "bad archive header magic"** | Your uid > 6 digits (corporate LDAP). `install.sh` will auto-fall-back to the AppImage. |
+| **First Polish click hangs ~10s** | OpenRouter is doing first-call model selection. Subsequent calls are fast. |
+| **First Grammar click hangs ~30–60s** | LanguageTool downloads ~200 MB of rules into `~/.cache/language_tool_python/`. One-time. |
+| **Mic permission denied** in Tauri window | Yawp installs an auto-grant for WebKitGTK; if it still appears, check `pavucontrol`. |
 
----
-
-## Build for distribution
+Logs:
 
 ```bash
-cd voice-app
-npm run tauri build
+journalctl --user -u yawp-sidecar -f
+journalctl --user -u yawp-daemon  -f
 ```
 
-Produces `.deb` and `.AppImage` in `src-tauri/target/release/bundle/`.
-Install via `sudo dpkg -i …_amd64.deb`. The Python sidecar isn't bundled
-yet — it runs as a separate process you start manually or via systemd.
+## Architecture quick-reference
+
+```
+voice-app/                — Tauri + React + TypeScript app
+  src/                       UI components (editorial warm)
+  src-tauri/                 Rust + Tauri config; WebKitGTK permission grant
+sidecar/
+  app/main.py                FastAPI endpoints
+  app/backends/whisper.py    faster-whisper backend (pluggable)
+  app/db.py                  SQLite + FTS5 + migrations
+  app/cleanup.py             Tier 1 regex polish
+  app/tagging.py             Rule-based + OpenRouter tag extraction
+  app/grammar.py             LanguageTool wrapper (Tier 2)
+  app/openrouter.py          OpenRouter chat client
+  app/voice_commands.py      "period" / "new paragraph" → punctuation
+  app/transcription_service.py   ASR + cleanup, separate enrichment
+  daemon.py                  Global hotkey daemon (toggle + hold)
+tools/benchmark_asr.py     Reproducible RTF benchmark
+install.sh                 One-shot installer + systemd autostart
+start.sh                   Dev launcher (sidecar + Vite + optional daemon/Tauri)
+```
+
+## Contributing
+
+Issues and pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for
+the short version: keep the architecture decoupled, write a test for any
+behavior you'd be sad to lose, and match the existing UI palette.
+
+This is a personal project shared in case it's useful. Response times may
+vary; please don't take silence personally.
+
+## License
+
+[MIT](LICENSE) © 2026 Bhuvanesh R

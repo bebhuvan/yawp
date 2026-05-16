@@ -13,8 +13,8 @@ dist-ssr/
 *.local
 
 # Rust / Tauri
+# Cargo.lock IS tracked — this is a binary, and reproducible builds need it.
 target/
-Cargo.lock
 
 # Logs
 *.log
