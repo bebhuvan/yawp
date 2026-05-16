@@ -128,7 +128,7 @@ After=default.target
 [Service]
 Type=simple
 WorkingDirectory=$SIDECAR
-ExecStart=$SIDECAR_PY $SIDECAR/run.py
+ExecStart="$SIDECAR_PY" "$SIDECAR/run.py"
 Restart=on-failure
 RestartSec=3
 # Keep the model loaded across restarts — only one writer per SQLite db.
@@ -151,7 +151,7 @@ Type=simple
 WorkingDirectory=$SIDECAR
 # Give the sidecar a moment to bind :17893 before the first hotkey fires.
 ExecStartPre=/bin/sleep 2
-ExecStart=$SIDECAR_PY $SIDECAR/daemon.py
+ExecStart="$SIDECAR_PY" "$SIDECAR/daemon.py"
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal
