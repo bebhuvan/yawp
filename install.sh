@@ -56,17 +56,62 @@ else
   step "Frontend deps already installed (skipping)"
 fi
 
-# --- 4. Build + install .deb ----------------------------------------------
-step "Building Yawp.deb (first Rust compile takes 3–5 minutes)"
+# --- 4. Build Tauri bundle -----------------------------------------------
+step "Building Yawp (first Rust compile takes 3–5 minutes)"
 (cd "$APP" && npm run tauri build)
 
 DEB=$(ls -t "$APP/src-tauri/target/release/bundle/deb/"*.deb 2>/dev/null | head -1)
-if [[ -z "$DEB" ]]; then
-  fail "Build produced no .deb — check the output above."
+APPIMAGE=$(ls -t "$APP/src-tauri/target/release/bundle/appimage/"*.AppImage 2>/dev/null | head -1)
+
+# Prefer the .deb when it works, but the .deb format's 6-byte uid/gid fields
+# overflow on systems where the user's uid is more than 6 digits (corporate
+# LDAP-style ids). Detect that and fall back to the AppImage.
+USE_APPIMAGE=0
+if [[ -n "$DEB" ]] && (( $(id -u) <= 999999 )) && (( $(id -g) <= 999999 )); then
+  step "Installing $DEB (sudo)"
+  if ! sudo dpkg -i "$DEB"; then
+    sudo apt-get install -fy || true
+    if ! dpkg -s yawp >/dev/null 2>&1; then
+      warn ".deb install failed — falling back to AppImage."
+      USE_APPIMAGE=1
+    fi
+  fi
+else
+  if [[ -z "$DEB" ]]; then
+    warn "No .deb produced — using AppImage."
+  else
+    warn "Your uid/gid is too large for the .deb format — using AppImage."
+  fi
+  USE_APPIMAGE=1
 fi
 
-step "Installing $DEB (sudo)"
-sudo dpkg -i "$DEB" || sudo apt-get install -fy
+if (( USE_APPIMAGE )); then
+  if [[ -z "$APPIMAGE" ]]; then
+    fail "Build produced no AppImage either — check the output above."
+  fi
+  step "Installing $APPIMAGE → ~/.local/bin/Yawp.AppImage"
+  mkdir -p "$HOME/.local/bin" \
+           "$HOME/.local/share/applications" \
+           "$HOME/.local/share/icons/hicolor/256x256/apps"
+  cp "$APPIMAGE" "$HOME/.local/bin/Yawp.AppImage"
+  chmod +x "$HOME/.local/bin/Yawp.AppImage"
+  cp "$APP/src-tauri/icons/128x128@2x.png" \
+     "$HOME/.local/share/icons/hicolor/256x256/apps/yawp.png"
+  cat > "$HOME/.local/share/applications/yawp.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Yawp
+Comment=Local-first voice dictation
+Exec=$HOME/.local/bin/Yawp.AppImage %U
+Icon=yawp
+Terminal=false
+Categories=Utility;AudioVideo;
+StartupNotify=true
+StartupWMClass=Yawp
+DESKTOP
+  update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+  gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+fi
 
 # --- 5. systemd user services --------------------------------------------
 step "Writing systemd user units"
