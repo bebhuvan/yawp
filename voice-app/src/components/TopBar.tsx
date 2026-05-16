@@ -31,7 +31,7 @@ export function TopBar({
     <header className="drag relative z-20 pt-9 pb-7">
       <div className="mx-auto flex max-w-[860px] items-end justify-between px-12">
         <div>
-          <div className="flex items-baseline gap-3">
+          <div className="flex items-baseline gap-2.5">
             <button
               onClick={() => onNavigate("library")}
               className="no-drag display-tight text-[28px] text-ink leading-none cursor-pointer transition-opacity hover:opacity-70"
@@ -39,13 +39,18 @@ export function TopBar({
             >
               Yawp
             </button>
-            <span className="text-ink-faint text-[14px]" aria-hidden>·</span>
-            <span className="font-serif text-[15px] text-ink-soft italic">
-              {view === "settings"
-                ? "settings"
-                : searchActive && searchValue
-                  ? `searching for “${searchValue}”`
-                  : "notes"}
+            <span
+              className="font-serif text-[15.5px] italic"
+              style={{ color: "var(--color-ink-quiet)" }}
+            >
+              in&thinsp;
+              <span style={{ color: "var(--color-ink-soft)" }}>
+                {view === "settings"
+                  ? "settings"
+                  : searchActive && searchValue
+                    ? `“${searchValue}”`
+                    : "notes"}
+              </span>
             </span>
           </div>
           <div className="mt-2 eyebrow">{today}</div>

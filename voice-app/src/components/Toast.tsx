@@ -1,51 +1,83 @@
 import { useEffect } from "react";
 
-export function Toast({
-  message,
-  onDismiss,
-  duration = 4000,
-}: {
-  message: string | null;
-  onDismiss: () => void;
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
+export interface ToastMessage {
+  text: string;
+  action?: ToastAction;
   duration?: number;
+}
+
+export function Toast({
+  toast,
+  onDismiss,
+}: {
+  toast: ToastMessage | null;
+  onDismiss: () => void;
 }) {
   useEffect(() => {
-    if (!message) return;
-    const t = setTimeout(onDismiss, duration);
+    if (!toast) return;
+    const ms = toast.duration ?? (toast.action ? 6000 : 4000);
+    const t = setTimeout(onDismiss, ms);
     return () => clearTimeout(t);
-  }, [message, onDismiss, duration]);
+  }, [toast, onDismiss]);
 
-  if (!message) return null;
+  if (!toast) return null;
 
   return (
     <div
-      className="fixed bottom-8 left-1/2 -translate-x-1/2 z-40 pointer-events-auto item-in"
+      className="fixed bottom-10 left-1/2 z-40 toast-in"
+      style={{ transform: "translateX(-50%)" }}
       role="status"
       aria-live="polite"
     >
       <div
-        className="flex items-center gap-3 px-5 py-3"
+        className="flex items-center gap-6 px-5 py-3"
         style={{
           background: "var(--color-paper)",
-          border: "1px solid var(--color-rule)",
-          borderRadius: 8,
+          borderTop: "1px solid var(--color-rule-soft)",
+          borderBottom: "1px solid var(--color-rule)",
+          borderLeft: "1px solid var(--color-rule-soft)",
+          borderRight: "1px solid var(--color-rule-soft)",
+          borderRadius: 4,
           boxShadow:
-            "0 8px 28px -10px rgba(40,28,18,0.22), 0 2px 6px -2px rgba(40,28,18,0.08)",
+            "0 16px 40px -22px rgba(40,28,18,0.30), 0 2px 6px -2px rgba(40,28,18,0.06)",
+          minWidth: 260,
         }}
       >
         <span
-          className="font-serif text-[14px] italic"
-          style={{ color: "var(--color-ink)" }}
+          className="font-serif text-[14.5px]"
+          style={{ color: "var(--color-ink)", letterSpacing: "-0.005em" }}
         >
-          {message}
+          {toast.text}
         </span>
-        <button
-          onClick={onDismiss}
-          className="eyebrow cursor-pointer hover:text-ink transition-colors"
-          aria-label="Dismiss"
-        >
-          dismiss
-        </button>
+
+        {toast.action ? (
+          <button
+            onClick={() => {
+              toast.action?.onClick();
+              onDismiss();
+            }}
+            className="font-serif text-[13.5px] cursor-pointer transition-colors hover:opacity-80"
+            style={{
+              color: "var(--color-accent)",
+              letterSpacing: "-0.005em",
+            }}
+          >
+            {toast.action.label}
+          </button>
+        ) : (
+          <button
+            onClick={onDismiss}
+            className="eyebrow cursor-pointer hover:text-ink transition-colors"
+            aria-label="Dismiss"
+          >
+            dismiss
+          </button>
+        )}
       </div>
     </div>
   );

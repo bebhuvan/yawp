@@ -13,8 +13,8 @@ export function Settings({
   const [s, setS] = useState<AppSettings | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [saving, setSaving] = useState(false);
-  const [pasteHotkey] = useState("Ctrl + Alt + V");
-  const [notesHotkey] = useState("Ctrl + Alt + N");
+  const pasteHotkey = "Ctrl + Alt + V";
+  const notesHotkey = "Ctrl + Alt + N";
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +73,7 @@ export function Settings({
   return (
     <div className="page-in mx-auto max-w-[700px] px-12 pb-32">
       <Section
+        index={1}
         title="Transcription"
         subtitle="Local faster-whisper model used by the sidecar. Restart the sidecar after changing this."
       >
@@ -99,7 +100,7 @@ export function Settings({
         </Help>
       </Section>
 
-      <Section title="Transcript cleanup" subtitle="Tier 1 — regex-based polish applied to every new transcript.">
+      <Section index={2} title="Transcript cleanup" subtitle="Tier 1 — regex-based polish applied to every new transcript.">
         <Toggle
           label="Auto-clean transcripts"
           help="Remove fillers (uh, um, you know), fix capitalization, dedupe stutters."
@@ -123,7 +124,7 @@ export function Settings({
         />
       </Section>
 
-      <Section title="Note intelligence" subtitle="Layer extra context onto each new note.">
+      <Section index={3} title="Note intelligence" subtitle="Layer extra context onto each new note.">
         <Toggle
           label="Auto-tag transcripts"
           help="Rule-based by default. Uses the selected OpenRouter model when a key is set (better tags)."
@@ -141,6 +142,7 @@ export function Settings({
       </Section>
 
       <Section
+        index={4}
         title="OpenRouter"
         subtitle="Optional. When set, used for conservative note polish and higher-quality tags. Free models cost nothing."
       >
@@ -201,6 +203,7 @@ export function Settings({
       </Section>
 
       <Section
+        index={5}
         title="Polish model"
         subtitle="Pick a free OpenRouter model — all are zero-cost. Curated from openrouter.ai/collections/free-models."
       >
@@ -246,8 +249,9 @@ export function Settings({
       </Section>
 
       <Section
+        index={6}
         title="Hotkeys"
-        subtitle="Daemon must be restarted to pick up changes here."
+        subtitle="Activation-mode changes apply live — no daemon restart needed."
       >
         <ModeRow
           label="Activation"
@@ -282,6 +286,7 @@ export function Settings({
       </Section>
 
       <Section
+        index={7}
         title="Markdown export"
         subtitle="Mirror every note as a .md file in a folder you choose. Compatible with Obsidian, Bear, iA Writer."
       >
@@ -310,6 +315,7 @@ export function Settings({
       </Section>
 
       <Section
+        index={8}
         title="Storage"
         subtitle="Everything is stored on this machine only."
       >
@@ -371,16 +377,32 @@ function ExportButton({
 }
 
 function Section({
+  index,
   title,
   subtitle,
   children,
 }: {
+  index?: number;
   title: string;
   subtitle?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section className="mt-14 first:mt-6">
+    <section className="mt-14 first:mt-6 relative">
+      {index !== undefined && (
+        <span
+          className="numeral absolute hidden md:block"
+          style={{
+            left: -52,
+            top: 6,
+            fontSize: 14,
+            letterSpacing: "0.15em",
+          }}
+          aria-hidden
+        >
+          {toRoman(index)}
+        </span>
+      )}
       <div className="mb-6">
         <h2
           className="display-tight text-[26px] text-ink leading-tight"
@@ -400,6 +422,20 @@ function Section({
       {children}
     </section>
   );
+}
+
+function toRoman(n: number): string {
+  const map: [number, string][] = [
+    [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"],
+  ];
+  let out = "";
+  for (const [v, sym] of map) {
+    while (n >= v) {
+      out += sym;
+      n -= v;
+    }
+  }
+  return out;
 }
 
 function Toggle({

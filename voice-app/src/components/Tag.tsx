@@ -10,12 +10,14 @@ export function Tag({
   return (
     <span
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 numeric text-[11px] py-0.5 px-2 rounded-full transition-colors cursor-default"
+      className="inline-flex items-center gap-1.5 numeric text-[10.5px] py-[3px] px-2 transition-colors"
       style={{
-        background: "var(--color-paper-deep)",
-        color: "var(--color-ink-soft)",
+        background: "transparent",
+        color: "var(--color-ink-quiet)",
         border: "1px solid var(--color-rule-soft)",
-        letterSpacing: "0.04em",
+        borderRadius: 2,
+        letterSpacing: "0.06em",
+        textTransform: "lowercase",
         cursor: onClick ? "pointer" : "default",
       }}
     >
@@ -27,8 +29,12 @@ export function Tag({
             onRemove();
           }}
           aria-label={`Remove ${label}`}
-          className="cursor-pointer hover:text-ink"
-          style={{ color: "var(--color-ink-quiet)", lineHeight: 1 }}
+          className="cursor-pointer hover:text-accent"
+          style={{
+            color: "var(--color-ink-faint)",
+            lineHeight: 1,
+            fontSize: 12,
+          }}
         >
           ×
         </button>

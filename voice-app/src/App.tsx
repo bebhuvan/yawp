@@ -4,7 +4,7 @@ import { Library } from "./components/Library";
 import { NoteDetail } from "./components/NoteDetail";
 import { Recorder } from "./components/Recorder";
 import { Settings } from "./components/Settings";
-import { Toast } from "./components/Toast";
+import { Toast, type ToastMessage } from "./components/Toast";
 import { api, userMessage, type ServerNote } from "./lib/api";
 import { useRecorder } from "./lib/useRecorder";
 import { makeLogger } from "./lib/log";
@@ -21,7 +21,15 @@ function App() {
   const [view, setView] = useState<View>("library");
   const [openId, setOpenId] = useState<string | null>(null);
   const [mode, setMode] = useState<RecordingMode>("notes");
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+
+  // Convenience helpers — most callers want to set a string with no action.
+  const showToast = useCallback(
+    (text: string, action?: ToastMessage["action"]) => {
+      setToast({ text, action });
+    },
+    [],
+  );
   const [sidecarUp, setSidecarUp] = useState<boolean | null>(null);
   const [modelReady, setModelReady] = useState<boolean | null>(null);
   const [liveTranscriptionEnabled, setLiveTranscriptionEnabled] = useState(true);
@@ -68,7 +76,7 @@ function App() {
         log.error("initial load failed", e);
         if (!cancelled) {
           setSidecarUp(false);
-          setToast(
+          showToast(
             "Couldn't reach the transcription service. Start the sidecar and reload.",
           );
         }
@@ -162,8 +170,8 @@ function App() {
 
   // Surface recorder errors as toasts
   useEffect(() => {
-    if (recorder.error) setToast(recorder.error);
-  }, [recorder.error]);
+    if (recorder.error) showToast(recorder.error);
+  }, [recorder.error, showToast]);
 
   // Search: debounced fetch
   useEffect(() => {
@@ -201,7 +209,7 @@ function App() {
         await api.health();
         setSidecarUp(true);
       } catch {
-        setToast(
+        showToast(
           "Sidecar isn't responding. Start it: " +
             "sidecar/.venv/bin/python sidecar/run.py",
         );
@@ -209,12 +217,12 @@ function App() {
       }
     }
     await recorder.start();
-  }, [recorder, sidecarUp]);
+  }, [recorder, sidecarUp, showToast]);
 
   const onStop = useCallback(async () => {
     const blob = await recorder.stop();
     if (!blob || blob.size === 0) {
-      setToast("Nothing was recorded.");
+      showToast("Nothing was recorded.");
       return;
     }
     setTranscribing(true);
@@ -231,7 +239,7 @@ function App() {
         "todos=" + result.todos.length,
       );
       if (!result.text.trim()) {
-        setToast("Couldn't hear anything in that clip.");
+        showToast("Couldn't hear anything in that clip.");
         return;
       }
       const note = await api.createNote({
@@ -252,18 +260,18 @@ function App() {
       } else {
         try {
           await navigator.clipboard.writeText(result.text);
-          setToast("Transcript copied to clipboard.");
+          showToast("Transcript copied to clipboard.");
         } catch {
-          setToast("Transcribed — couldn't access clipboard.");
+          showToast("Transcribed — couldn't access clipboard.");
         }
       }
     } catch (e: unknown) {
       log.error("transcribe failed", e);
-      setToast(userMessage(e, "Transcription failed."));
+      showToast(userMessage(e, "Transcription failed."));
     } finally {
       setTranscribing(false);
     }
-  }, [mode, recorder]);
+  }, [mode, recorder, showToast]);
 
   const onCancel = useCallback(() => {
     recorder.cancel();
@@ -281,21 +289,44 @@ function App() {
     );
   }, []);
 
-  const onNoteDelete = useCallback(async (id: string) => {
-    try {
-      await api.deleteNote(id);
-      setNotes((prev) => prev.filter((n) => n.id !== id));
-      setSearchResults((prev) =>
-        prev ? prev.filter((n) => n.id !== id) : prev,
-      );
-      setOpenId(null);
-      setView("library");
-      setToast("Note deleted.");
-    } catch (e) {
-      console.error(e);
-      setToast("Couldn't delete note.");
-    }
-  }, []);
+  const onNoteDelete = useCallback(
+    async (id: string) => {
+      // Snapshot for optimistic restore on undo.
+      const wasOpen = openId === id;
+      try {
+        await api.deleteNote(id);
+        setNotes((prev) => prev.filter((n) => n.id !== id));
+        setSearchResults((prev) =>
+          prev ? prev.filter((n) => n.id !== id) : prev,
+        );
+        setOpenId(null);
+        setView("library");
+        showToast("Note moved to trash.", {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              const restored = await api.restoreNote(id);
+              setNotes((prev) => {
+                if (prev.some((n) => n.id === restored.id)) return prev;
+                return [restored, ...prev];
+              });
+              if (wasOpen) {
+                setOpenId(restored.id);
+                setView("detail");
+              }
+              showToast("Restored.");
+            } catch (e) {
+              showToast(userMessage(e, "Couldn't restore note."));
+            }
+          },
+        });
+      } catch (e) {
+        log.error("delete failed", e);
+        showToast(userMessage(e, "Couldn't delete note."));
+      }
+    },
+    [openId, showToast],
+  );
 
   const openNoteObj = notes.find((n) => n.id === openId) ?? null;
   const displayedNotes = searchResults ?? notes;
@@ -326,11 +357,7 @@ function App() {
         {view === "library" && !loading && (
           <Library notes={displayedNotes} onOpen={openNote} />
         )}
-        {view === "library" && loading && (
-          <div className="mx-auto max-w-[860px] px-12 pt-12 eyebrow text-ink-quiet">
-            Loading notes…
-          </div>
-        )}
+        {view === "library" && loading && <LibrarySkeleton />}
         {view === "detail" && openNoteObj && (
           <NoteDetail
             note={openNoteObj}
@@ -340,12 +367,12 @@ function App() {
             }}
             onUpdate={onNoteUpdate}
             onDelete={onNoteDelete}
-            onToast={setToast}
+            onToast={showToast}
           />
         )}
         {view === "settings" && (
           <Settings
-            onToast={setToast}
+            onToast={showToast}
             onLiveTranscriptionChange={setLiveTranscriptionEnabled}
           />
         )}
@@ -364,7 +391,45 @@ function App() {
 
       {modelReady === false && <ModelLoadingBanner />}
 
-      <Toast message={toast} onDismiss={() => setToast(null)} />
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
+    </div>
+  );
+}
+
+function LibrarySkeleton() {
+  return (
+    <div className="page-in mx-auto max-w-[860px] px-12 pb-32">
+      <div className="flex items-center gap-4 pt-6 pb-2">
+        <span className="skeleton" style={{ height: 9, width: 78 }} />
+        <span className="h-px flex-1 bg-rule-soft" />
+      </div>
+      {[0, 1, 2].map((i) => (
+        <div
+          key={i}
+          className="py-7 border-b border-rule-soft"
+          style={{ opacity: 1 - i * 0.18 }}
+        >
+          <div className="flex items-baseline justify-between gap-6">
+            <span
+              className="skeleton"
+              style={{ height: 22, width: 320 - i * 60, borderRadius: 2 }}
+            />
+            <span
+              className="skeleton"
+              style={{ height: 11, width: 52, borderRadius: 2 }}
+            />
+          </div>
+          <div className="mt-4 flex flex-col gap-2">
+            <span className="skeleton" style={{ height: 14, width: "100%" }} />
+            <span className="skeleton" style={{ height: 14, width: "92%" }} />
+            <span className="skeleton" style={{ height: 14, width: "68%" }} />
+          </div>
+          <div className="mt-5 flex items-center gap-3">
+            <span className="skeleton" style={{ height: 10, width: 40 }} />
+            <span className="skeleton" style={{ height: 10, width: 60 }} />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

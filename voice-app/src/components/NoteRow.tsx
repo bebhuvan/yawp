@@ -16,11 +16,15 @@ export function NoteRow({
     .trim()
     .slice(0, 260);
 
+  // Cap the stagger so a large library doesn't take 2+ seconds to fully
+  // render. Anything past the 8th row appears immediately.
+  const staggerDelay = Math.min(index, 8) * 50;
+
   return (
     <article
       onClick={() => onOpen(note.id)}
       className="row-hover item-in group cursor-pointer py-7 px-6 -mx-6 rounded-[2px]"
-      style={{ animationDelay: `${index * 50}ms` }}
+      style={{ animationDelay: `${staggerDelay}ms` }}
     >
       <div className="flex items-baseline justify-between gap-6">
         <h2

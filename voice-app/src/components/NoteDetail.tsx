@@ -430,60 +430,66 @@ export function NoteDetail({
         </div>
       )}
 
-      <div className="mt-16 pt-8 border-t border-rule-soft flex items-center gap-6 flex-wrap">
+      <div className="mt-16 pt-8 border-t border-rule-soft flex items-center flex-wrap gap-y-3">
         {!editing && (
           <>
-            <button
-              onClick={copy}
-              className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors"
-              style={{ color: copied ? "var(--color-accent)" : undefined }}
-            >
-              <CopyIcon /> {copied ? "Copied" : "Copy"}
-            </button>
-            <button
-              onClick={polish}
-              disabled={polishing}
-              className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors disabled:opacity-60"
-            >
-              <SparkleIcon /> {polishing ? "Polishing…" : "Polish"}
-            </button>
-            <button
-              onClick={checkGrammar}
-              disabled={grammarChecking}
-              className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors disabled:opacity-60"
-            >
-              <CheckIcon /> {grammarChecking ? "Checking…" : "Check grammar"}
-            </button>
-            {note.todos.length === 0 && (
+            <div className="flex items-center gap-7 flex-wrap">
               <button
-                onClick={extractTodos}
-                disabled={extractingTodos}
+                onClick={copy}
+                className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors"
+                style={{ color: copied ? "var(--color-accent)" : undefined }}
+              >
+                <CopyIcon /> {copied ? "Copied" : "Copy"}
+              </button>
+              <button
+                onClick={polish}
+                disabled={polishing}
                 className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors disabled:opacity-60"
               >
-                <TasksIcon /> {extractingTodos ? "Extracting…" : "Find action items"}
+                <SparkleIcon /> {polishing ? "Polishing…" : "Polish"}
               </button>
-            )}
-            <button
-              onClick={startEdit}
-              className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors"
-            >
-              <EditIcon /> Edit
-            </button>
-            {audio && (
               <button
-                onClick={togglePlay}
-                className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors"
-                style={{ color: audioPlaying ? "var(--color-accent)" : undefined }}
+                onClick={checkGrammar}
+                disabled={grammarChecking}
+                className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors disabled:opacity-60"
               >
-                {audioPlaying ? <StopIcon /> : <PlayIcon />}{" "}
-                {audioPlaying ? "Stop" : "Replay audio"}
+                <CheckIcon /> {grammarChecking ? "Checking…" : "Check grammar"}
               </button>
-            )}
+              {note.todos.length === 0 && (
+                <button
+                  onClick={extractTodos}
+                  disabled={extractingTodos}
+                  className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors disabled:opacity-60"
+                >
+                  <TasksIcon />{" "}
+                  {extractingTodos ? "Extracting…" : "Find action items"}
+                </button>
+              )}
+              <button
+                onClick={startEdit}
+                className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors"
+              >
+                <EditIcon /> Edit
+              </button>
+              {audio && (
+                <button
+                  onClick={togglePlay}
+                  className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors"
+                  style={{
+                    color: audioPlaying ? "var(--color-accent)" : undefined,
+                  }}
+                >
+                  {audioPlaying ? <StopIcon /> : <PlayIcon />}{" "}
+                  {audioPlaying ? "Stop" : "Replay audio"}
+                </button>
+              )}
+            </div>
+            <span className="flex-1" aria-hidden />
             <button
               onClick={() => setConfirmDelete(true)}
               disabled={deleting}
-              className="eyebrow flex items-center gap-2 cursor-pointer hover:text-ink transition-colors disabled:opacity-60"
-              style={{ color: "var(--color-ink-quiet)" }}
+              className="eyebrow flex items-center gap-2 cursor-pointer hover:opacity-100 transition-opacity disabled:opacity-60"
+              style={{ color: "var(--color-ink-faint)", opacity: 0.85 }}
             >
               <TrashIcon /> {deleting ? "Deleting…" : "Delete"}
             </button>
@@ -493,11 +499,12 @@ export function NoteDetail({
           <>
             <button
               onClick={saveEdit}
-              className="font-serif text-[14px] cursor-pointer transition-colors"
+              className="font-serif text-[14px] cursor-pointer transition-colors hover:opacity-80"
               style={{ color: "var(--color-accent)" }}
             >
               Save
             </button>
+            <span className="w-6" aria-hidden />
             <button
               onClick={cancelEdit}
               className="eyebrow cursor-pointer hover:text-ink transition-colors"
