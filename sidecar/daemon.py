@@ -180,11 +180,29 @@ def encode_wav(audio: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def post_transcribe(wav_bytes: bytes) -> dict:
+def post_transcribe(wav_bytes: bytes, *, enrich: bool = True) -> dict:
     files = {"audio": ("audio.wav", wav_bytes, "audio/wav")}
-    r = requests.post(f"{SIDECAR}/transcribe", files=files, timeout=600)
+    # enrich=False skips tag/todo extraction inside the request so paste-mode
+    # users see typed text immediately, without waiting for OpenRouter.
+    data = {"enrich": "true" if enrich else "false"}
+    r = requests.post(
+        f"{SIDECAR}/transcribe", files=files, data=data, timeout=600
+    )
     r.raise_for_status()
     return r.json()
+
+
+def delete_orphan_audio(audio_path: str | None) -> None:
+    """Best-effort cleanup for paste-mode audio that won't be referenced by
+    any saved note. Silent on failure."""
+    if not audio_path:
+        return
+    try:
+        from pathlib import Path
+
+        Path(audio_path).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def post_note(data: dict, mode: str) -> None:
@@ -285,8 +303,11 @@ def _process(audio: np.ndarray, mode: str) -> None:
             return
         notify("Transcribing…")
         wav = encode_wav(audio)
+        # Paste mode skips enrichment so the typed text appears the moment
+        # ASR finishes — no waiting on OpenRouter for tags/todos.
+        enrich = mode != "paste"
         try:
-            data = post_transcribe(wav)
+            data = post_transcribe(wav, enrich=enrich)
         except requests.RequestException as e:
             notify(f"Transcription failed: {e}")
             return
@@ -299,7 +320,8 @@ def _process(audio: np.ndarray, mode: str) -> None:
             try:
                 post_note(data, mode="paste")
             except requests.RequestException:
-                pass
+                # Note save failed — don't orphan the audio file on disk.
+                delete_orphan_audio(data.get("audio_path"))
             if ok:
                 preview = text[:48] + ("…" if len(text) > 48 else "")
                 notify(f"Pasted: {preview}")

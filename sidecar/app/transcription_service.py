@@ -41,7 +41,14 @@ def transcribe_file(
     filename: str,
     language: Optional[str] = None,
     keep_audio: bool = True,
+    enrich: bool = True,
 ) -> TranscriptionOutput:
+    """Transcribe + clean. Tag/todo extraction is only run when enrich=True.
+
+    enrich=False keeps the ASR worker free of OpenRouter latency — used by
+    paste mode so the text appears immediately. Callers can run enrich_text()
+    afterwards in a background task if needed.
+    """
     s = settings.get()
     audio_path = _persist_audio(source, filename, keep_audio=keep_audio)
 
@@ -63,22 +70,10 @@ def transcribe_file(
         cleanup.clean(text_intermediate) if s.cleanup_enabled else text_intermediate
     )
 
-    tags = []
-    if s.auto_tag_enabled and text_clean:
-        tags = tagging.extract(
-            text_clean,
-            openrouter_key=s.openrouter_api_key or None,
-            openrouter_model=s.openrouter_model if s.openrouter_api_key else None,
-            k=s.max_tags,
-        )
-
+    tags: list[str] = []
     extracted_todos: list[dict] = []
-    if s.extract_todos_enabled and s.openrouter_api_key and text_clean:
-        extracted_todos = todos_mod.extract(
-            text_clean,
-            api_key=s.openrouter_api_key,
-            model=s.openrouter_model,
-        )
+    if enrich:
+        tags, extracted_todos = enrich_text(text_clean)
 
     return TranscriptionOutput(
         text=text_clean,
@@ -92,6 +87,29 @@ def transcribe_file(
         tags=tags,
         todos=extracted_todos,
     )
+
+
+def enrich_text(text: str) -> tuple[list[str], list[dict]]:
+    """Run tagging + todo extraction. Network-bound (OpenRouter); safe to call
+    outside the ASR executor."""
+    s = settings.get()
+    tags: list[str] = []
+    if s.auto_tag_enabled and text:
+        tags = tagging.extract(
+            text,
+            openrouter_key=s.openrouter_api_key or None,
+            openrouter_model=s.openrouter_model if s.openrouter_api_key else None,
+            k=s.max_tags,
+        )
+
+    extracted_todos: list[dict] = []
+    if s.extract_todos_enabled and s.openrouter_api_key and text:
+        extracted_todos = todos_mod.extract(
+            text,
+            api_key=s.openrouter_api_key,
+            model=s.openrouter_model,
+        )
+    return tags, extracted_todos
 
 
 def make_title(text: str) -> str:

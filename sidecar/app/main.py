@@ -34,6 +34,8 @@ from . import (
     logging_config,
     openrouter,
     settings,
+    tagging,
+    todos as todos_mod,
     transcription_service,
 )
 
@@ -129,24 +131,31 @@ _PURGE_AFTER_SECONDS = int(os.environ.get("VOICE_PURGE_AFTER_SECONDS", "60"))
 _PURGE_INTERVAL_SECONDS = 30
 
 
-async def _purge_loop() -> None:
-    """Background sweeper: hard-deletes notes whose deleted_at is older than
-    _PURGE_AFTER_SECONDS, and unlinks their audio files. Runs forever."""
+def _purge_due_notes() -> None:
+    """Sync — call from a thread executor. Hard-deletes notes whose
+    deleted_at is older than _PURGE_AFTER_SECONDS and unlinks their audio."""
     from datetime import datetime, timezone, timedelta
 
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(seconds=_PURGE_AFTER_SECONDS)
+    ).isoformat(timespec="milliseconds")
+    with db.cursor() as conn:
+        rows = conn.execute(
+            "SELECT id FROM notes "
+            "WHERE deleted_at IS NOT NULL AND deleted_at < ?",
+            (cutoff,),
+        ).fetchall()
+    for r in rows:
+        db.purge_note(r["id"])
+
+
+async def _purge_loop() -> None:
+    """Background sweeper. Runs the actual DB I/O in a thread executor so
+    purges don't stall the asyncio loop even on a large trash."""
+    loop = asyncio.get_event_loop()
     while True:
         try:
-            cutoff = (
-                datetime.now(timezone.utc) - timedelta(seconds=_PURGE_AFTER_SECONDS)
-            ).isoformat(timespec="milliseconds")
-            with db.cursor() as conn:
-                rows = conn.execute(
-                    "SELECT id FROM notes "
-                    "WHERE deleted_at IS NOT NULL AND deleted_at < ?",
-                    (cutoff,),
-                ).fetchall()
-            for r in rows:
-                db.purge_note(r["id"])
+            await loop.run_in_executor(None, _purge_due_notes)
         except Exception:
             log.exception("purge loop tick failed")
         await asyncio.sleep(_PURGE_INTERVAL_SECONDS)
@@ -369,8 +378,15 @@ async def transcribe(
     audio: UploadFile = File(...),
     language: Optional[str] = Form(default=None),
     keep_audio: bool = Form(default=True),
+    enrich: bool = Form(default=True),
 ) -> TranscribeResponse:
+    """Transcribe + clean. When enrich=True (default) also runs tagging +
+    todo extraction inline. Paste-mode callers should pass enrich=false so the
+    text is returned immediately; the daemon enriches after pasting if it
+    wants tags/todos on the saved note."""
+    loop = asyncio.get_event_loop()
     try:
+        # ASR + cleanup: heavy CPU, must serialize on the dedicated worker.
         result = await _run_in_asr(
             transcription_service.transcribe_file,
             backend=_default_backend,
@@ -378,10 +394,23 @@ async def transcribe(
             filename=audio.filename or "audio.wav",
             language=language,
             keep_audio=keep_audio,
+            enrich=False,
         )
     except Exception as e:
         log.exception("Transcription failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+    # Enrichment is network-bound (OpenRouter) — keep it off the ASR worker
+    # so the next transcribe / stream tick doesn't queue behind it.
+    tags: list[str] = []
+    todos_list: list[dict] = []
+    if enrich:
+        try:
+            tags, todos_list = await loop.run_in_executor(
+                None, transcription_service.enrich_text, result.text
+            )
+        except Exception:
+            log.exception("enrichment failed (continuing without tags/todos)")
 
     return TranscribeResponse(
         text=result.text,
@@ -395,8 +424,8 @@ async def transcribe(
             for segment in result.segments
         ],
         audio_path=result.audio_path,
-        tags=result.tags,
-        todos=result.todos,
+        tags=tags,
+        todos=todos_list,
     )
 
 
