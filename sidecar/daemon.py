@@ -417,6 +417,63 @@ def fetch_settings() -> dict:
         return {}
 
 
+# Live cached settings + the active hotkey listener. Replacing the listener
+# in place lets `reload-settings` switch between toggle and hold mode without
+# restarting the daemon.
+_active_listener: Optional[object] = None
+_active_mode: Optional[str] = None
+
+
+def _build_listener(hotkey_mode: str):
+    if hotkey_mode == "hold":
+        kn = _parse_key(HOLD_KEY_NOTES)
+        kp = _parse_key(HOLD_KEY_PASTE)
+        if kn is None or kp is None:
+            log.error(
+                "could not parse hold keys (notes=%r, paste=%r)",
+                HOLD_KEY_NOTES,
+                HOLD_KEY_PASTE,
+            )
+            return None
+        ctl = HoldController({kn: "notes", kp: "paste"})
+        return keyboard.Listener(on_press=ctl.on_press, on_release=ctl.on_release)
+    return keyboard.GlobalHotKeys(
+        {HOTKEY_NOTES: toggle_notes, HOTKEY_PASTE: toggle_paste}
+    )
+
+
+def _swap_listener(hotkey_mode: str) -> str:
+    """Replace the active hotkey listener with one for the given mode.
+    Returns the mode actually applied (in case parsing failed)."""
+    global _active_listener, _active_mode
+    if hotkey_mode == _active_mode and _active_listener is not None:
+        return _active_mode
+    new_listener = _build_listener(hotkey_mode)
+    if new_listener is None:
+        return _active_mode or "toggle"
+    if _active_listener is not None:
+        try:
+            _active_listener.stop()  # type: ignore[attr-defined]
+        except Exception:
+            log.exception("stopping previous listener failed")
+    new_listener.start()
+    _active_listener = new_listener
+    _active_mode = hotkey_mode
+    return hotkey_mode
+
+
+def reload_settings() -> str:
+    """Re-read settings from the sidecar and swap the listener if the
+    activation mode changed."""
+    s = fetch_settings()
+    mode_env = os.environ.get("VOICE_HOTKEY_MODE")
+    desired = mode_env or s.get("hotkey_mode") or "toggle"
+    applied = _swap_listener(desired)
+    log.info("settings reloaded (mode=%s)", applied)
+    notify(f"Hotkeys reloaded — {applied} mode.")
+    return applied
+
+
 def command_status() -> str:
     with state.lock:
         if state.recording:
@@ -439,6 +496,9 @@ def handle_command(command: str) -> str:
         return command_status()
     if command == "status":
         return command_status()
+    if command == "reload-settings":
+        applied = reload_settings()
+        return f"reloaded:{applied}"
     return "error:unknown-command"
 
 
@@ -568,34 +628,31 @@ def main(argv: Optional[list[str]] = None) -> int:
             file=sys.stderr,
         )
 
-    if hotkey_mode == "hold":
-        kn = _parse_key(HOLD_KEY_NOTES)
-        kp = _parse_key(HOLD_KEY_PASTE)
-        if kn is None or kp is None:
-            print(
-                f"ERROR: could not parse hold keys "
-                f"(notes={HOLD_KEY_NOTES!r}, paste={HOLD_KEY_PASTE!r})",
-                file=sys.stderr,
-            )
-            return 2
-        ctl = HoldController({kn: "notes", kp: "paste"})
-        listener = keyboard.Listener(
-            on_press=ctl.on_press, on_release=ctl.on_release
+    applied = _swap_listener(hotkey_mode)
+    if _active_listener is None:
+        print(
+            f"ERROR: could not parse hold keys "
+            f"(notes={HOLD_KEY_NOTES!r}, paste={HOLD_KEY_PASTE!r})",
+            file=sys.stderr,
         )
-    else:
-        listener = keyboard.GlobalHotKeys(
-            {HOTKEY_NOTES: toggle_notes, HOTKEY_PASTE: toggle_paste}
-        )
+        return 2
+    if applied != hotkey_mode:
+        print(f"  · Falling back to: {applied}", file=sys.stderr)
 
-    listener.start()
     try:
-        listener.join()
+        # Block until interrupted. The listener runs in its own thread; the
+        # main thread just waits.
+        threading.Event().wait()
     except KeyboardInterrupt:
         print("\n[voice] stopping daemon")
         with state.lock:
             if state.recording:
                 close_stream()
-        listener.stop()
+        if _active_listener is not None:
+            try:
+                _active_listener.stop()  # type: ignore[attr-defined]
+            except Exception:
+                pass
     finally:
         command_server.close()
         COMMAND_SOCKET.unlink(missing_ok=True)

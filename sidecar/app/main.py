@@ -21,7 +21,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import (
@@ -157,6 +157,63 @@ async def _start_background_tasks() -> None:
     asyncio.create_task(_purge_loop())
 
 
+# --- SSE event bus ---------------------------------------------------------
+#
+# Subscribers register an asyncio.Queue; broadcast_event() puts the payload
+# into every queue. The /events endpoint streams from a single subscriber's
+# queue. Used so the Tauri UI can update live when the daemon creates a note,
+# instead of waiting for the next page reload.
+
+_subscribers: list[asyncio.Queue] = []
+_subscribers_lock = threading.Lock()
+
+
+def broadcast_event(kind: str, payload: dict) -> None:
+    """Fan out an event to every subscriber. Safe to call from any thread."""
+    msg = {"type": kind, "payload": payload}
+    with _subscribers_lock:
+        snapshot = list(_subscribers)
+    for q in snapshot:
+        try:
+            q.put_nowait(msg)
+        except asyncio.QueueFull:
+            # Subscriber is slow / disconnected. Drop the event for it.
+            pass
+
+
+@app.get("/events")
+async def events_endpoint() -> StreamingResponse:
+    queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+    with _subscribers_lock:
+        _subscribers.append(queue)
+
+    async def stream():
+        # Initial hello so reconnecting clients know they're back online.
+        yield "event: hello\ndata: {}\n\n"
+        try:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=20.0)
+                except asyncio.TimeoutError:
+                    # Heartbeat keeps proxies / browsers from idling us out.
+                    yield ": ping\n\n"
+                    continue
+                yield f"event: {msg['type']}\ndata: {json.dumps(msg['payload'])}\n\n"
+        finally:
+            with _subscribers_lock:
+                if queue in _subscribers:
+                    _subscribers.remove(queue)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # Single-worker executor pinned to the model. faster-whisper is not safe under
 # concurrent decodes, and sharing the default executor with /stream ticks
 # means /transcribe queues behind partial passes (and vice versa). One worker
@@ -279,7 +336,29 @@ def put_settings(req: SettingsUpdate) -> dict:
     incoming = {k: v for k, v in req.model_dump(exclude_none=True).items()}
     # Convention: an empty string clears the api key; missing → no change.
     settings.update(incoming)
+    # If hotkey_mode changed, poke the daemon so it switches modes without a
+    # restart. Best-effort — the daemon may not be running.
+    if "hotkey_mode" in incoming:
+        _poke_daemon_reload()
     return settings.get().to_safe_dict()
+
+
+def _poke_daemon_reload() -> None:
+    """Send 'reload-settings' to the daemon over its unix socket. Silent on
+    failure (daemon not running is the common case)."""
+    sock_path = config.DATA_DIR / "daemon.sock"
+    if not sock_path.exists():
+        return
+    try:
+        import socket as _socket
+
+        with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            s.connect(str(sock_path))
+            s.sendall(b"reload-settings")
+            s.recv(64)
+    except OSError:
+        pass
 
 
 # ----- Transcribe -----------------------------------------------------------
@@ -351,7 +430,9 @@ def create_note_endpoint(req: CreateNoteRequest) -> dict:
         todos=req.todos or [],
     )
     _auto_export_if_enabled()
-    return note.to_dict()
+    payload = note.to_dict()
+    broadcast_event("note.created", payload)
+    return payload
 
 
 @app.patch("/notes/{note_id}")
@@ -366,7 +447,9 @@ def update_note_endpoint(note_id: str, req: UpdateNoteRequest) -> dict:
     if not note:
         raise HTTPException(status_code=404, detail="not found")
     _auto_export_if_enabled()
-    return note.to_dict()
+    payload = note.to_dict()
+    broadcast_event("note.updated", payload)
+    return payload
 
 
 @app.post("/notes/{note_id}/extract-todos")
@@ -413,6 +496,7 @@ def delete_note_endpoint(note_id: str) -> None:
     if not ok:
         raise HTTPException(status_code=404, detail="not found")
     _auto_export_if_enabled()
+    broadcast_event("note.deleted", {"id": note_id})
     return None
 
 
@@ -423,7 +507,9 @@ def restore_note_endpoint(note_id: str) -> dict:
     if not note:
         raise HTTPException(status_code=404, detail="already purged")
     _auto_export_if_enabled()
-    return note.to_dict()
+    payload = note.to_dict()
+    broadcast_event("note.restored", payload)
+    return payload
 
 
 def _auto_export_if_enabled() -> None:

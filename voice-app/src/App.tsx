@@ -5,7 +5,7 @@ import { NoteDetail } from "./components/NoteDetail";
 import { Recorder } from "./components/Recorder";
 import { Settings } from "./components/Settings";
 import { Toast } from "./components/Toast";
-import { api, userMessage } from "./lib/api";
+import { api, userMessage, type ServerNote } from "./lib/api";
 import { useRecorder } from "./lib/useRecorder";
 import { makeLogger } from "./lib/log";
 import type { Note, RecordingMode } from "./lib/types";
@@ -98,6 +98,67 @@ function App() {
     }, 5000);
     return () => clearInterval(id);
   }, [modelReady]);
+
+  // SSE: live updates from the sidecar (notes created/updated/deleted by the
+  // hotkey daemon, by another window, or by external tooling). The browser
+  // auto-reconnects on connection loss.
+  useEffect(() => {
+    const es = new EventSource("http://127.0.0.1:17893/events");
+
+    const upsertFromServerNote = (sn: ServerNote) => {
+      const note: Note = {
+        id: sn.id,
+        title: sn.title,
+        transcript: sn.transcript,
+        createdAt: new Date(sn.createdAt),
+        durationSec: sn.durationSec,
+        model: sn.model,
+        mode: sn.mode,
+        audioPath: sn.audioPath ?? undefined,
+        tags: sn.tags ?? [],
+        todos: sn.todos ?? [],
+      };
+      setNotes((prev) => {
+        const idx = prev.findIndex((n) => n.id === note.id);
+        if (idx === -1) return [note, ...prev];
+        const next = prev.slice();
+        next[idx] = note;
+        return next;
+      });
+    };
+
+    es.addEventListener("note.created", (e) => {
+      try {
+        upsertFromServerNote(JSON.parse((e as MessageEvent).data));
+      } catch (err) {
+        log.warn("event note.created parse failed", err);
+      }
+    });
+    es.addEventListener("note.updated", (e) => {
+      try {
+        upsertFromServerNote(JSON.parse((e as MessageEvent).data));
+      } catch (err) {
+        log.warn("event note.updated parse failed", err);
+      }
+    });
+    es.addEventListener("note.deleted", (e) => {
+      try {
+        const { id } = JSON.parse((e as MessageEvent).data);
+        setNotes((prev) => prev.filter((n) => n.id !== id));
+      } catch (err) {
+        log.warn("event note.deleted parse failed", err);
+      }
+    });
+    es.addEventListener("note.restored", (e) => {
+      try {
+        upsertFromServerNote(JSON.parse((e as MessageEvent).data));
+      } catch (err) {
+        log.warn("event note.restored parse failed", err);
+      }
+    });
+
+    return () => es.close();
+  }, []);
 
   // Surface recorder errors as toasts
   useEffect(() => {
