@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { api, userMessage } from "../lib/api";
 import { ModelDropdown } from "./ModelDropdown";
 import type { AppSettings } from "../lib/types";
 
@@ -353,7 +353,7 @@ function ExportButton({
       onToast(`Exported ${r.count} note${r.count === 1 ? "" : "s"} to ${r.dest}.`);
     } catch (e) {
       console.error(e);
-      onToast((e as Error).message || "Export failed.");
+      onToast(userMessage(e, "Export failed."));
     } finally {
       setExporting(false);
     }

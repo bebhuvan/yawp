@@ -18,6 +18,11 @@ from . import config
 SETTINGS_PATH = config.DATA_DIR / "settings.json"
 _lock = threading.Lock()
 
+# Cache the parsed Settings keyed by the file's mtime_ns. Re-reading JSON on
+# every WS tick + every transcription is wasteful. Invalidates automatically
+# when the file changes (PUT /settings, external edit, daemon reload).
+_cache: tuple[int, "Settings"] | None = None
+
 
 @dataclass
 class Settings:
@@ -91,13 +96,26 @@ class Settings:
 
 
 def get() -> Settings:
-    """Read fresh from disk every call — cheap, avoids stale state when the
-    daemon and sidecar both run."""
+    """Returns cached settings, reloading only if the file changed on disk.
+
+    Both the daemon and the sidecar can write to settings.json, so cache
+    invalidation is keyed on st_mtime_ns rather than process-local state.
+    """
+    global _cache
     with _lock:
-        return Settings.load()
+        try:
+            mtime = SETTINGS_PATH.stat().st_mtime_ns
+        except FileNotFoundError:
+            mtime = 0
+        if _cache is not None and _cache[0] == mtime:
+            return _cache[1]
+        loaded = Settings.load()
+        _cache = (mtime, loaded)
+        return loaded
 
 
 def update(partial: dict[str, Any]) -> Settings:
+    global _cache
     with _lock:
         current = Settings.load()
         # Pydantic-like guard: only allow known fields
@@ -105,4 +123,16 @@ def update(partial: dict[str, Any]) -> Settings:
             if hasattr(current, k):
                 setattr(current, k, v)
         current.save()
+        try:
+            mtime = SETTINGS_PATH.stat().st_mtime_ns
+        except FileNotFoundError:
+            mtime = 0
+        _cache = (mtime, current)
         return current
+
+
+def invalidate_cache() -> None:
+    """Force the next get() to reload from disk. Use after external writes."""
+    global _cache
+    with _lock:
+        _cache = None

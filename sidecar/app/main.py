@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -79,11 +81,25 @@ async def log_requests(request, call_next):
         )
     return response
 
+# Restrict to the local Tauri webview and Vite dev server. The sidecar binds
+# to 127.0.0.1 already, but a wildcard origin lets any browser tab on the box
+# read every note. Tauri 2 uses tauri://localhost on macOS/Linux and
+# http://tauri.localhost on Windows.
+_DEFAULT_ORIGINS = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+]
+_extra = os.environ.get("VOICE_EXTRA_ORIGINS", "").strip()
+_allowed_origins = _DEFAULT_ORIGINS + [o.strip() for o in _extra.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -105,6 +121,17 @@ def _preload_in_bg() -> None:
 threading.Thread(target=_preload_in_bg, daemon=True).start()
 
 _grammar = grammar.Grammar()
+
+# Single-worker executor pinned to the model. faster-whisper is not safe under
+# concurrent decodes, and sharing the default executor with /stream ticks
+# means /transcribe queues behind partial passes (and vice versa). One worker
+# guarantees serialised access without starving anything else on the loop.
+_asr_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="yawp-asr")
+
+
+def _run_in_asr(fn, *args, **kwargs):
+    loop = asyncio.get_event_loop()
+    return loop.run_in_executor(_asr_executor, lambda: fn(*args, **kwargs))
 
 
 # ----- Schemas --------------------------------------------------------------
@@ -230,7 +257,8 @@ async def transcribe(
     keep_audio: bool = Form(default=True),
 ) -> TranscribeResponse:
     try:
-        result = transcription_service.transcribe_file(
+        result = await _run_in_asr(
+            transcription_service.transcribe_file,
             backend=_default_backend,
             source=audio.file,
             filename=audio.filename or "audio.wav",
@@ -450,10 +478,17 @@ def grammar_apply_endpoint(req: GrammarApplyRequest) -> dict:
 
 @app.get("/audio/{filename}")
 def get_audio(filename: str) -> FileResponse:
-    target = (config.AUDIO_DIR / filename).resolve()
-    if not str(target).startswith(str(config.AUDIO_DIR.resolve())):
+    # Reject anything that smells like a traversal before resolving — paths with
+    # separators or '..' shouldn't reach the filesystem at all.
+    if "/" in filename or "\\" in filename or filename.startswith(".."):
         raise HTTPException(status_code=400, detail="bad path")
-    if not target.exists():
+    audio_root = config.AUDIO_DIR.resolve()
+    target = (config.AUDIO_DIR / filename).resolve()
+    try:
+        target.relative_to(audio_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad path")
+    if not target.is_file():
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(str(target))
 
@@ -525,11 +560,10 @@ async def stream(websocket: WebSocket) -> None:
                 resampled = await loop.run_in_executor(
                     None, _resample_to_16k, concat, sr
                 )
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: _default_backend.transcribe(
-                        resampled, initial_prompt=initial_prompt
-                    ),
+                result = await _run_in_asr(
+                    _default_backend.transcribe,
+                    resampled,
+                    initial_prompt=initial_prompt,
                 )
             except Exception as e:
                 log.exception("stream partial failed")
@@ -597,11 +631,10 @@ async def stream(websocket: WebSocket) -> None:
                 resampled = await loop.run_in_executor(
                     None, _resample_to_16k, full, sr
                 )
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: _default_backend.transcribe(
-                        resampled, initial_prompt=initial_prompt
-                    ),
+                result = await _run_in_asr(
+                    _default_backend.transcribe,
+                    resampled,
+                    initial_prompt=initial_prompt,
                 )
                 final_text = result.text.strip()
                 if s.cleanup_enabled:

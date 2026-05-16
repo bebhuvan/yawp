@@ -5,7 +5,7 @@ import { NoteDetail } from "./components/NoteDetail";
 import { Recorder } from "./components/Recorder";
 import { Settings } from "./components/Settings";
 import { Toast } from "./components/Toast";
-import { api } from "./lib/api";
+import { api, userMessage } from "./lib/api";
 import { useRecorder } from "./lib/useRecorder";
 import { makeLogger } from "./lib/log";
 import type { Note, RecordingMode } from "./lib/types";
@@ -198,7 +198,7 @@ function App() {
       }
     } catch (e: unknown) {
       log.error("transcribe failed", e);
-      setToast((e as Error)?.message ?? "Transcription failed.");
+      setToast(userMessage(e, "Transcription failed."));
     } finally {
       setTranscribing(false);
     }

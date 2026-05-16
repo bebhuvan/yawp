@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Note, Todo } from "../lib/types";
-import { api, audioUrl, type GrammarIssue } from "../lib/api";
+import { api, audioUrl, userMessage, type GrammarIssue } from "../lib/api";
 import { formatDuration, longDate, formatTime } from "../lib/utils";
 import { Tag } from "./Tag";
 
@@ -102,7 +102,7 @@ export function NoteDetail({
       }
     } catch (e) {
       console.error(e);
-      onToast((e as Error).message || "Polish failed.");
+      onToast(userMessage(e, "Polish failed."));
     } finally {
       setPolishing(false);
     }
@@ -116,7 +116,7 @@ export function NoteDetail({
       if (r.issues.length === 0) onToast("No grammar issues found.");
     } catch (e) {
       console.error(e);
-      onToast((e as Error).message || "Grammar check failed.");
+      onToast(userMessage(e, "Grammar check failed."));
     } finally {
       setGrammarChecking(false);
     }
@@ -131,7 +131,7 @@ export function NoteDetail({
       onToast("Grammar corrections applied.");
     } catch (e) {
       console.error(e);
-      onToast((e as Error).message || "Couldn't apply corrections.");
+      onToast(userMessage(e, "Couldn't apply corrections."));
     } finally {
       setGrammarApplying(false);
     }
@@ -151,7 +151,7 @@ export function NoteDetail({
       }
     } catch (e) {
       console.error(e);
-      onToast((e as Error).message || "Couldn't extract action items.");
+      onToast(userMessage(e, "Couldn't extract action items."));
     } finally {
       setExtractingTodos(false);
     }
