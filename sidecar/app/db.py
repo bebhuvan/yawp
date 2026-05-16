@@ -12,53 +12,124 @@ from typing import Optional
 from . import config
 
 
-BASE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS notes (
-    id           TEXT PRIMARY KEY,
-    title        TEXT NOT NULL,
-    transcript   TEXT NOT NULL,
-    language     TEXT,
-    model        TEXT NOT NULL,
-    mode         TEXT NOT NULL CHECK (mode IN ('notes', 'paste')),
-    duration_sec REAL NOT NULL,
-    audio_path   TEXT,
-    created_at   TEXT NOT NULL,
-    tags         TEXT NOT NULL DEFAULT '[]',
-    todos        TEXT NOT NULL DEFAULT '[]'
-);
-CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at DESC);
-"""
+# --- Schema migrations ------------------------------------------------------
+#
+# Driven by PRAGMA user_version. Each entry runs in order whenever the DB's
+# user_version is below its key. Append new versions to the end; do not edit
+# released migrations.
 
-# External-content FTS5 keyed on the implicit rowid of `notes`.
-# Triggers keep notes_fts in sync. Re-indexing is cheap.
-FTS_SCHEMA = """
-CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-    title, transcript, tags,
-    content='notes',
-    content_rowid='rowid',
-    tokenize='porter unicode61'
-);
+_MIGRATIONS: list[tuple[int, str]] = [
+    (
+        1,
+        """
+        CREATE TABLE IF NOT EXISTS notes (
+            id           TEXT PRIMARY KEY,
+            title        TEXT NOT NULL,
+            transcript   TEXT NOT NULL,
+            language     TEXT,
+            model        TEXT NOT NULL,
+            mode         TEXT NOT NULL CHECK (mode IN ('notes', 'paste')),
+            duration_sec REAL NOT NULL,
+            audio_path   TEXT,
+            created_at   TEXT NOT NULL,
+            tags         TEXT NOT NULL DEFAULT '[]',
+            todos        TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE INDEX IF NOT EXISTS idx_notes_created_at ON notes(created_at DESC);
 
-CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-    INSERT INTO notes_fts(rowid, title, transcript, tags)
-    VALUES (new.rowid, new.title, new.transcript, new.tags);
-END;
+        CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+            title, transcript, tags,
+            content='notes',
+            content_rowid='rowid',
+            tokenize='porter unicode61'
+        );
 
-CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-    INSERT INTO notes_fts(notes_fts, rowid, title, transcript, tags)
-    VALUES('delete', old.rowid, old.title, old.transcript, old.tags);
-END;
+        CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
+            INSERT INTO notes_fts(rowid, title, transcript, tags)
+            VALUES (new.rowid, new.title, new.transcript, new.tags);
+        END;
 
-CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-    INSERT INTO notes_fts(notes_fts, rowid, title, transcript, tags)
-    VALUES('delete', old.rowid, old.title, old.transcript, old.tags);
-    INSERT INTO notes_fts(rowid, title, transcript, tags)
-    VALUES (new.rowid, new.title, new.transcript, new.tags);
-END;
-"""
+        CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
+            INSERT INTO notes_fts(notes_fts, rowid, title, transcript, tags)
+            VALUES('delete', old.rowid, old.title, old.transcript, old.tags);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
+            INSERT INTO notes_fts(notes_fts, rowid, title, transcript, tags)
+            VALUES('delete', old.rowid, old.title, old.transcript, old.tags);
+            INSERT INTO notes_fts(rowid, title, transcript, tags)
+            VALUES (new.rowid, new.title, new.transcript, new.tags);
+        END;
+        """,
+    ),
+    (
+        2,
+        # Soft-delete: deleted_at IS NULL means visible. We do not remove the
+        # row or audio file at delete-time; the API issues a hard purge after
+        # an undo window expires.
+        """
+        ALTER TABLE notes ADD COLUMN deleted_at TEXT;
+        CREATE INDEX IF NOT EXISTS idx_notes_deleted_at ON notes(deleted_at);
+        """,
+    ),
+]
 
 
-_lock = threading.Lock()
+# --- Connection management --------------------------------------------------
+#
+# One connection per thread, kept open for the thread's lifetime. SQLite WAL
+# allows many readers + one writer concurrently; the previous global lock
+# serialised everything, defeating WAL.
+
+_local = threading.local()
+_pragma_lock = threading.Lock()  # only used at first-touch initialisation
+
+
+def _connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(
+        config.DB_PATH,
+        isolation_level=None,
+        check_same_thread=False,
+        timeout=10.0,
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=10000")
+    return conn
+
+
+def _conn() -> sqlite3.Connection:
+    c = getattr(_local, "conn", None)
+    if c is None:
+        c = _connect()
+        _local.conn = c
+    return c
+
+
+@contextmanager
+def cursor():
+    """Yield this thread's connection. Kept open across requests."""
+    yield _conn()
+
+
+def init_db() -> None:
+    Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    with _pragma_lock:
+        conn = _connect()
+        try:
+            current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            for version, script in _MIGRATIONS:
+                if current < version:
+                    conn.executescript(script)
+                    conn.execute(f"PRAGMA user_version = {version}")
+                    current = version
+        finally:
+            conn.close()
+
+
+# --- Schema ----------------------------------------------------------------
 
 
 @dataclass
@@ -74,6 +145,7 @@ class NoteRow:
     created_at: str
     tags: list[str]
     todos: list[dict]
+    deleted_at: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -88,25 +160,8 @@ class NoteRow:
             "createdAt": self.created_at,
             "tags": self.tags,
             "todos": self.todos,
+            "deletedAt": self.deleted_at,
         }
-
-
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(config.DB_PATH, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
-
-
-@contextmanager
-def cursor():
-    with _lock:
-        conn = _connect()
-        try:
-            yield conn
-        finally:
-            conn.close()
 
 
 def _row_to_note(row: sqlite3.Row) -> NoteRow:
@@ -128,23 +183,9 @@ def _row_to_note(row: sqlite3.Row) -> NoteRow:
     return NoteRow(tags=tags, todos=todos, **d)
 
 
-def init_db() -> None:
-    Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    with cursor() as conn:
-        conn.executescript(BASE_SCHEMA)
-        # Migrations — add columns missing from older schemas.
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(notes)").fetchall()}
-        if "tags" not in cols:
-            conn.execute("ALTER TABLE notes ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
-        if "todos" not in cols:
-            conn.execute("ALTER TABLE notes ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'")
-        conn.executescript(FTS_SCHEMA)
-        conn.execute("INSERT INTO notes_fts(notes_fts) VALUES('rebuild')")
-
-
 _SELECT_COLS = (
     "id, title, transcript, language, model, mode, "
-    "duration_sec, audio_path, created_at, tags, todos"
+    "duration_sec, audio_path, created_at, tags, todos, deleted_at"
 )
 
 
@@ -152,6 +193,7 @@ def list_notes(limit: int = 500) -> list[NoteRow]:
     with cursor() as conn:
         rows = conn.execute(
             f"SELECT {_SELECT_COLS} FROM notes "
+            "WHERE deleted_at IS NULL "
             "ORDER BY created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -168,7 +210,7 @@ def search_notes(query: str, limit: int = 100) -> list[NoteRow]:
         rows = conn.execute(
             f"SELECT {', '.join('n.' + c.strip() for c in _SELECT_COLS.split(','))} "
             "FROM notes_fts f JOIN notes n ON n.rowid = f.rowid "
-            "WHERE notes_fts MATCH ? "
+            "WHERE notes_fts MATCH ? AND n.deleted_at IS NULL "
             "ORDER BY rank LIMIT ?",
             (q, limit),
         ).fetchall()
@@ -191,12 +233,19 @@ def _build_fts_query(query: str) -> str:
     return " OR ".join(parts)
 
 
-def get_note(note_id: str) -> Optional[NoteRow]:
+def get_note(note_id: str, include_deleted: bool = False) -> Optional[NoteRow]:
     with cursor() as conn:
-        row = conn.execute(
-            f"SELECT {_SELECT_COLS} FROM notes WHERE id = ?",
-            (note_id,),
-        ).fetchone()
+        if include_deleted:
+            row = conn.execute(
+                f"SELECT {_SELECT_COLS} FROM notes WHERE id = ?",
+                (note_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                f"SELECT {_SELECT_COLS} FROM notes "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (note_id,),
+            ).fetchone()
     return _row_to_note(row) if row else None
 
 
@@ -277,14 +326,47 @@ def update_note(
     values.append(note_id)
     with cursor() as conn:
         conn.execute(
-            f"UPDATE notes SET {', '.join(fields)} WHERE id = ?",
+            f"UPDATE notes SET {', '.join(fields)} "
+            "WHERE id = ? AND deleted_at IS NULL",
             tuple(values),
         )
     return get_note(note_id)
 
 
-def delete_note(note_id: str) -> bool:
+def soft_delete_note(note_id: str) -> bool:
+    """Mark deleted_at = now. Audio file is kept until purge_deleted runs."""
     note = get_note(note_id)
+    if not note:
+        return False
+    with cursor() as conn:
+        conn.execute(
+            "UPDATE notes SET deleted_at = ? WHERE id = ?",
+            (_iso_now(), note_id),
+        )
+    return True
+
+
+def restore_note(note_id: str) -> Optional[NoteRow]:
+    """Undelete a soft-deleted note. Returns the restored NoteRow, or None
+    if the note doesn't exist or was already purged."""
+    with cursor() as conn:
+        existing = conn.execute(
+            f"SELECT {_SELECT_COLS} FROM notes WHERE id = ?",
+            (note_id,),
+        ).fetchone()
+        if not existing:
+            return None
+        conn.execute(
+            "UPDATE notes SET deleted_at = NULL WHERE id = ?",
+            (note_id,),
+        )
+    return get_note(note_id)
+
+
+def purge_note(note_id: str) -> bool:
+    """Hard-delete a note and unlink its audio file. Used after the undo
+    window expires, or to prune the trash."""
+    note = get_note(note_id, include_deleted=True)
     if not note:
         return False
     with cursor() as conn:
@@ -297,6 +379,11 @@ def delete_note(note_id: str) -> bool:
     return True
 
 
+# Back-compat alias — older callers used delete_note for a hard delete.
+def delete_note(note_id: str) -> bool:
+    return soft_delete_note(note_id)
+
+
 def _iso_now() -> str:
     from datetime import datetime, timezone
 
@@ -305,4 +392,8 @@ def _iso_now() -> str:
 
 def count_notes() -> int:
     with cursor() as conn:
-        return int(conn.execute("SELECT COUNT(*) FROM notes").fetchone()[0])
+        return int(
+            conn.execute(
+                "SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL"
+            ).fetchone()[0]
+        )

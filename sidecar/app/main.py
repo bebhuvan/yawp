@@ -122,6 +122,41 @@ threading.Thread(target=_preload_in_bg, daemon=True).start()
 
 _grammar = grammar.Grammar()
 
+
+# Soft-delete grace window: rows older than this get hard-purged + audio
+# unlinked. The frontend's Undo toast lives ~6 s, so 60 s is generous.
+_PURGE_AFTER_SECONDS = int(os.environ.get("VOICE_PURGE_AFTER_SECONDS", "60"))
+_PURGE_INTERVAL_SECONDS = 30
+
+
+async def _purge_loop() -> None:
+    """Background sweeper: hard-deletes notes whose deleted_at is older than
+    _PURGE_AFTER_SECONDS, and unlinks their audio files. Runs forever."""
+    from datetime import datetime, timezone, timedelta
+
+    while True:
+        try:
+            cutoff = (
+                datetime.now(timezone.utc) - timedelta(seconds=_PURGE_AFTER_SECONDS)
+            ).isoformat(timespec="milliseconds")
+            with db.cursor() as conn:
+                rows = conn.execute(
+                    "SELECT id FROM notes "
+                    "WHERE deleted_at IS NOT NULL AND deleted_at < ?",
+                    (cutoff,),
+                ).fetchall()
+            for r in rows:
+                db.purge_note(r["id"])
+        except Exception:
+            log.exception("purge loop tick failed")
+        await asyncio.sleep(_PURGE_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def _start_background_tasks() -> None:
+    asyncio.create_task(_purge_loop())
+
+
 # Single-worker executor pinned to the model. faster-whisper is not safe under
 # concurrent decodes, and sharing the default executor with /stream ticks
 # means /transcribe queues behind partial passes (and vice versa). One worker
@@ -371,11 +406,24 @@ def export_endpoint(req: ExportRequest) -> dict:
 
 @app.delete("/notes/{note_id}", status_code=204)
 def delete_note_endpoint(note_id: str) -> None:
-    ok = db.delete_note(note_id)
+    """Soft-delete: marks deleted_at = now. The note vanishes from list/search
+    immediately, but the row + audio survive until the purge sweeper runs
+    (~60s) so the UI can offer Undo."""
+    ok = db.soft_delete_note(note_id)
     if not ok:
         raise HTTPException(status_code=404, detail="not found")
     _auto_export_if_enabled()
     return None
+
+
+@app.post("/notes/{note_id}/restore")
+def restore_note_endpoint(note_id: str) -> dict:
+    """Undo a soft-delete. Only works while the row hasn't been purged yet."""
+    note = db.restore_note(note_id)
+    if not note:
+        raise HTTPException(status_code=404, detail="already purged")
+    _auto_export_if_enabled()
+    return note.to_dict()
 
 
 def _auto_export_if_enabled() -> None:
