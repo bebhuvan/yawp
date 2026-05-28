@@ -27,17 +27,18 @@ toggle-paste, cancel, reload, restart, and logs."
         }
     }
 
-    // WebKitGTK paints a black window on some GPUs (notably NVIDIA, and after
-    // the display sleeps) when its DMA-BUF renderer is active. Disabling just
-    // that renderer is a low-cost, targeted fix that keeps hardware-accelerated
-    // compositing. We deliberately do NOT force software rendering or disable
-    // compositing here: those make the webview stop repainting after the window
-    // is hidden to the tray or the monitor sleeps, which is the opposite of
-    // what we want. Set before the webview is created so every launch path
+    // WebKitGTK leaves a blank/stale surface after the window is occluded on
+    // some Intel/Mesa + X11 stacks when accelerated compositing is active, and
+    // no amount of forcing a repaint on focus reliably recovers it. Disabling
+    // the DMA-BUF renderer and accelerated compositing routes WebKit through the
+    // older non-composited paint path, which doesn't lose its buffer. We keep
+    // hardware GL (no LIBGL_ALWAYS_SOFTWARE) — forcing llvmpipe was slow and
+    // hang-prone. Set before the webview is created so every launch path
     // (.deb, AppImage, dev) gets it.
     #[cfg(target_os = "linux")]
     {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
     }
 
     tauri::Builder::default()
@@ -143,9 +144,11 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg(target_os = "linux")]
 fn force_repaint<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use gtk::prelude::WidgetExt;
+    // Light, side-effect-free nudge. With accelerated compositing disabled the
+    // non-composited path repaints on its own, so this is just belt-and-braces
+    // — no window resizing (that caused hangs) and no extra threads.
     let _ = window.with_webview(|webview| {
         let wv = webview.inner();
-        wv.queue_resize();
         wv.queue_draw();
     });
 }

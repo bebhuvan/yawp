@@ -54,6 +54,9 @@ test("settings exposes runtime status without a terminal", async ({ page }) => {
 
   await expect(page.getByText("System status")).toBeVisible();
   await expect(page.getByRole("combobox").first()).toBeVisible();
+  // The downloadable-model comparison is a collapsible disclosure; expand it.
+  await expect(page.getByText("Compare downloadable models")).toBeVisible();
+  await page.getByText("Compare downloadable models").click();
   await expect(page.getByText("Reliable downloadable models")).toBeVisible();
   await expect(page.getByText("Distil-Whisper Large v3")).toBeVisible();
   await expect(page.getByText("Daemon", { exact: true })).toBeVisible();

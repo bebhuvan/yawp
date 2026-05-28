@@ -307,7 +307,7 @@ _SELECT_COLS = (
 )
 
 
-def list_notes(limit: int = 500, folder_id: Optional[str] = None) -> list[NoteRow]:
+def list_notes(limit: int = 5000, folder_id: Optional[str] = None) -> list[NoteRow]:
     with cursor() as conn:
         if folder_id == "__uncategorized__":
             rows = conn.execute(

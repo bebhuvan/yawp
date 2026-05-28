@@ -126,7 +126,6 @@ export function Settings({
 
   useEffect(() => {
     void checkUpdate();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshDiagnostics = async () => {
@@ -666,6 +665,49 @@ export function Settings({
         title="System status"
         subtitle="A compact runtime check for support and troubleshooting."
       >
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-rule-soft pb-5">
+          <div>
+            <p
+              className="display-tight text-[16px] text-ink"
+              style={{ letterSpacing: "-0.018em" }}
+            >
+              Software update
+            </p>
+            <p
+              className="mt-1 font-serif text-[14px] text-ink-soft italic"
+              style={{ lineHeight: 1.55 }}
+            >
+              {appVersion ? `Yawp v${appVersion} — ` : ""}
+              {updateInfo.status === "checking"
+                ? "checking…"
+                : updateInfo.status === "available"
+                  ? `version ${updateInfo.latest} is available.`
+                  : updateInfo.status === "error"
+                    ? "couldn't reach GitHub to check."
+                    : "you're up to date."}
+            </p>
+          </div>
+          <button
+            onClick={() =>
+              updateInfo.status === "available"
+                ? void openUrl(RELEASES_URL)
+                : void checkUpdate()
+            }
+            disabled={updateInfo.status === "checking"}
+            className="pill-control eyebrow cursor-pointer px-4 transition-colors hover:text-ink disabled:opacity-50"
+            style={
+              updateInfo.status === "available"
+                ? { color: "var(--color-accent)", borderColor: "var(--color-accent)" }
+                : undefined
+            }
+          >
+            {updateInfo.status === "available"
+              ? "Get the update ↗"
+              : updateInfo.status === "checking"
+                ? "Checking…"
+                : "Check for updates"}
+          </button>
+        </div>
         <RuntimeDiagnostics
           diagnostics={diagnostics}
           onRefresh={refreshDiagnostics}
@@ -704,32 +746,9 @@ export function Settings({
         >
           Project website ↗
         </button>
-        <div className="flex items-center gap-3 eyebrow text-ink-faint">
-          <span>Yawp{appVersion ? ` v${appVersion}` : ""}</span>
-          <span aria-hidden>·</span>
-          <span
-            style={
-              updateInfo.status === "available"
-                ? { color: "var(--color-accent)" }
-                : undefined
-            }
-          >
-            {updateInfo.status === "checking"
-              ? "checking…"
-              : updateInfo.status === "available"
-                ? "update available"
-                : updateInfo.status === "error"
-                  ? "couldn't check"
-                  : "up to date"}
-          </span>
-          <button
-            onClick={() => void checkUpdate()}
-            disabled={updateInfo.status === "checking"}
-            className="cursor-pointer transition-colors hover:text-ink disabled:opacity-50"
-          >
-            Check
-          </button>
-        </div>
+        <span className="eyebrow text-ink-faint">
+          Yawp{appVersion ? ` v${appVersion}` : ""} · built by Claude
+        </span>
       </footer>
     </div>
   );

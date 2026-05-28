@@ -5,14 +5,14 @@ All notable changes to Yawp are documented here. Dates are absolute.
 ## [0.2.0] — 2026-05-28
 
 ### Fixed
-- **Window black-screen / launch flicker (Linux/WebKitGTK).** The window now
-  starts hidden and is revealed only after the frontend paints its first frame
-  (`app-ready` event), eliminating the black pre-paint flash. Regaining focus,
-  showing from the tray, and re-showing after the display sleeps now force a
-  GTK-level repaint, fixing the "fully black window after long idle" case. The
-  renderer env vars were trimmed to only `WEBKIT_DISABLE_DMABUF_RENDERER=1`
-  (kept) — forcing software rendering / disabling compositing was removed
-  because it *caused* the stale-buffer repaint failures rather than fixing them.
+- **Window black/blank screen + launch flicker (Linux/WebKitGTK).** The window
+  now starts hidden and is revealed only after the frontend paints its first
+  frame (`app-ready` event), eliminating the pre-paint flash. Accelerated
+  compositing and the DMA-BUF renderer are disabled
+  (`WEBKIT_DISABLE_COMPOSITING_MODE=1`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`)
+  while keeping hardware GL, which routes WebKitGTK through the non-composited
+  paint path that doesn't leave a blank/stale surface after the window is
+  occluded — the root cause of the window going blank on focus switches.
 - **Polish dumped model "thinking" into notes.** Reasoning models (e.g. the
   default `openai/gpt-oss-20b:free`) returned chain-of-thought in a separate
   channel; the code surfaced it as the result. OpenRouter requests now exclude

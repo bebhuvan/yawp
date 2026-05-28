@@ -3,7 +3,7 @@ export function installWebkitRepaintRecovery() {
     const root = document.getElementById("root");
     if (!root) return;
     root.style.opacity = "0.999";
-    root.getBoundingClientRect();
+    void root.offsetHeight; // synchronous reflow
     requestAnimationFrame(() => {
       root.style.opacity = "";
     });

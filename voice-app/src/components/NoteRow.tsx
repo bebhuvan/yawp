@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Check, Pencil, Trash2 } from "lucide-react";
 import type { Note } from "../lib/types";
 import { formatDuration, formatTime } from "../lib/utils";
 
 const EXCERPT_MAX = 240;
 
-export function NoteRow({
+function NoteRowImpl({
   note,
   folderName,
   dayLabel,
@@ -68,7 +68,7 @@ export function NoteRow({
     <article
       onClick={handleClick}
       aria-selected={selecting ? selected : undefined}
-      className={`row-hover-zone grid grid-cols-[120px_1fr] gap-x-10 ${topClass} pb-9`}
+      className={`note-row row-hover-zone grid grid-cols-[120px_1fr] gap-x-10 ${topClass} pb-9`}
       style={{
         borderTop:
           firstOfDay && !firstOverall
@@ -205,6 +205,10 @@ export function NoteRow({
     </article>
   );
 }
+
+// Memoized so unrelated app state changes (search, toasts, recording) don't
+// re-render every row in a large library.
+export const NoteRow = memo(NoteRowImpl);
 
 function SnippetText({ text }: { text: string }) {
   const parts = text.split(/(\[\[.*?\]\])/g).filter(Boolean);

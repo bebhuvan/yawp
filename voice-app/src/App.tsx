@@ -203,14 +203,14 @@ function App() {
     return () => es.close();
   }, []);
 
-  const openNote = (id: string) => {
+  const openNote = useCallback((id: string) => {
     setOpenId(id);
-  };
+  }, []);
 
-  const editNote = (id: string) => {
+  const editNote = useCallback((id: string) => {
     setOpenId(id);
     setEditRequest((n) => n + 1);
-  };
+  }, []);
 
   const onStart = capture.start;
 

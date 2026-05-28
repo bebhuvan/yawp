@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { Folder, Note } from "../lib/types";
 import { relativeDay } from "../lib/utils";
 import { NoteRow } from "./NoteRow";
@@ -52,13 +52,14 @@ export function Library({
     [notes],
   );
 
-  const toggleSelect = (id: string) =>
+  const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  }, []);
 
   const exitSelection = () => {
     setSelecting(false);
