@@ -1,0 +1,59 @@
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: voice-app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            portaudio19-dev \
+            libportaudio2 \
+            ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv sidecar/.venv
+          sidecar/.venv/bin/python -m pip install --upgrade pip
+          sidecar/.venv/bin/python -m pip install -r sidecar/requirements.txt -r sidecar/requirements-dev.txt
+
+      - name: Install frontend dependencies
+        working-directory: voice-app
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: voice-app
+        run: npx playwright install --with-deps chromium
+
+      - name: Run quality gate
+        run: ./scripts/check

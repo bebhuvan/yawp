@@ -2,6 +2,15 @@ fastapi==0.136.1
 uvicorn[standard]==0.47.0
 python-multipart>=0.0.9
 faster-whisper==1.2.1
+onnx-asr[cpu,hub]>=0.11.0
+requests>=2.32.0
+sounddevice>=0.5.1
 soundfile>=0.13.1
 numpy>=2.0
 pydantic>=2.0
+pynput>=1.7.7
+# webrtcvad 2.x imports pkg_resources at import time. Newer setuptools builds
+# can omit that compatibility module, so keep the packaging shim explicit.
+setuptools<81
+webrtcvad>=2.0.10
+language-tool-python>=2.8.1

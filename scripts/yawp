@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${YAWP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+DAEMON_PY="$ROOT/sidecar/daemon.py"
+PYTHON_BIN="${YAWP_PYTHON:-$ROOT/sidecar/.venv/bin/python}"
+
+usage() {
+  cat <<'EOF'
+Yawp command line
+
+Usage:
+  yawp <command>
+
+Commands:
+  status          Print daemon state.
+  status-json     Print detailed daemon state as JSON.
+  doctor          Print sidecar diagnostics.
+  toggle-notes    Start/stop recording to notes.
+  toggle-paste    Start/stop recording to paste.
+  cancel          Cancel current recording.
+  reload          Reload daemon hotkey settings.
+  restart         Restart sidecar and daemon user services.
+  logs            Follow sidecar and daemon logs.
+  debug-bundle    Create a local support bundle.
+  help            Show this help.
+EOF
+}
+
+need_python() {
+  if [[ ! -x "$PYTHON_BIN" ]]; then
+    printf 'Missing sidecar Python: %s\n' "$PYTHON_BIN" >&2
+    printf 'Run ./install.sh or set YAWP_PYTHON.\n' >&2
+    exit 2
+  fi
+}
+
+daemon_cmd() {
+  PYTHONWARNINGS="${PYTHONWARNINGS:-ignore:pkg_resources is deprecated as an API:UserWarning}" \
+  YAWP_QUIET_CONSOLE=1 \
+    "$PYTHON_BIN" "$DAEMON_PY" "$@"
+}
+
+cmd="${1:-help}"
+case "$cmd" in
+  status)
+    need_python
+    daemon_cmd --status
+    ;;
+  status-json)
+    need_python
+    daemon_cmd --status-json
+    ;;
+  doctor)
+    "$ROOT/scripts/doctor"
+    ;;
+  toggle-notes)
+    need_python
+    daemon_cmd --toggle-notes
+    ;;
+  toggle-paste)
+    need_python
+    daemon_cmd --toggle-paste
+    ;;
+  cancel)
+    need_python
+    daemon_cmd --cancel
+    ;;
+  reload)
+    need_python
+    daemon_cmd --reload-settings
+    ;;
+  restart)
+    systemctl --user restart yawp-sidecar.service yawp-daemon.service
+    ;;
+  logs)
+    journalctl --user -f -u yawp-sidecar.service -u yawp-daemon.service
+    ;;
+  debug-bundle)
+    "$ROOT/scripts/debug-bundle"
+    ;;
+  help|--help|-h)
+    usage
+    ;;
+  *)
+    printf 'Unknown command: %s\n\n' "$cmd" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

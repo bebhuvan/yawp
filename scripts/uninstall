@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APPIMAGE="$HOME/.local/bin/Yawp.AppImage"
+DESKTOP="$HOME/.local/share/applications/yawp.desktop"
+ICON="$HOME/.local/share/icons/hicolor/256x256/apps/yawp.png"
+UNIT_DIR="$HOME/.config/systemd/user"
+
+if [[ "${1:-}" != "--yes" ]]; then
+  cat <<'EOF'
+This will stop and disable Yawp user services and remove launcher files.
+
+It will not delete your notes, audio, or settings in ~/.voice/.
+
+Run:
+  ./scripts/uninstall --yes
+EOF
+  exit 0
+fi
+
+systemctl --user disable --now yawp-daemon.service 2>/dev/null || true
+systemctl --user disable --now yawp-sidecar.service 2>/dev/null || true
+
+rm -f "$UNIT_DIR/yawp-daemon.service" "$UNIT_DIR/yawp-sidecar.service"
+systemctl --user daemon-reload 2>/dev/null || true
+
+if command -v dpkg >/dev/null 2>&1 && dpkg -s yawp >/dev/null 2>&1; then
+  sudo apt-get remove -y yawp || sudo dpkg -r yawp || true
+fi
+
+rm -f "$APPIMAGE" "$DESKTOP" "$ICON"
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+
+cat <<'EOF'
+Yawp app and services removed.
+
+User data was kept:
+  ~/.voice/
+
+To delete all notes, audio, and settings manually:
+  rm -rf ~/.voice
+EOF

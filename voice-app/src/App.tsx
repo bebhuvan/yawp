@@ -1,25 +1,40 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { TopBar } from "./components/TopBar";
 import { Library } from "./components/Library";
-import { NoteDetail } from "./components/NoteDetail";
+import { SafeNoteDetail } from "./components/SafeNoteDetail";
 import { Recorder } from "./components/Recorder";
 import { Settings } from "./components/Settings";
+import { Trash } from "./components/Trash";
+import { AskView } from "./components/AskView";
 import { Toast, type ToastMessage } from "./components/Toast";
-import { api, userMessage, type ServerNote } from "./lib/api";
-import { useRecorder } from "./lib/useRecorder";
+import {
+  api,
+  fromServerFolder,
+  fromServerNote,
+  sidecarEventsUrl,
+  userMessage,
+  type ServerFolder,
+  type ServerNote,
+} from "./lib/api";
 import { makeLogger } from "./lib/log";
-import type { Note, RecordingMode } from "./lib/types";
+import { removeNote, replaceExistingNote, upsertNote } from "./lib/noteState";
+import { useNativeCapture } from "./lib/useNativeCapture";
+import { useNoteSearch } from "./lib/useNoteSearch";
+import type { Folder, Note, RecordingMode } from "./lib/types";
 
 const log = makeLogger("Yawp.app");
 
-type View = "library" | "detail" | "settings";
-type FlowState = "idle" | "recording" | "transcribing";
+type View = "library" | "settings" | "trash" | "ask";
+type FolderFilter = "all" | "uncategorized" | string;
 
 function App() {
   const [notes, setNotes] = useState<Note[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<View>("library");
+  const [selectedFolderId, setSelectedFolderId] = useState<FolderFilter>("all");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [editRequest, setEditRequest] = useState(0);
   const [mode, setMode] = useState<RecordingMode>("notes");
   const [toast, setToast] = useState<ToastMessage | null>(null);
 
@@ -32,22 +47,11 @@ function App() {
   );
   const [sidecarUp, setSidecarUp] = useState<boolean | null>(null);
   const [modelReady, setModelReady] = useState<boolean | null>(null);
-  const [liveTranscriptionEnabled, setLiveTranscriptionEnabled] = useState(true);
+  const [openRouterConfigured, setOpenRouterConfigured] = useState(false);
 
-  // Search state
-  const [searchActive, setSearchActive] = useState(false);
-  const [searchValue, setSearchValue] = useState("");
-  const [searchResults, setSearchResults] = useState<Note[] | null>(null);
-  const searchSeqRef = useRef(0);
-
-  const recorder = useRecorder({ liveTranscription: liveTranscriptionEnabled });
-  const [transcribing, setTranscribing] = useState(false);
-  const flow: FlowState =
-    transcribing
-      ? "transcribing"
-      : recorder.state === "recording"
-        ? "recording"
-        : "idle";
+  const search = useNoteSearch(notes);
+  const capture = useNativeCapture({ sidecarUp, setSidecarUp, showToast });
+  const flow = capture.flow;
 
   // Initial load
   useEffect(() => {
@@ -65,11 +69,17 @@ function App() {
           "ready=" + h.model_ready,
           "notes=" + h.notes_count,
         );
-        const list = await api.listNotes();
-        const settings = await api.getSettings();
+        const [list, folderList, settings, captureStatus] = await Promise.all([
+          api.listNotes(),
+          api.listFolders(),
+          api.getSettings(),
+          api.captureStatus().catch(() => null),
+        ]);
         if (!cancelled) {
           setNotes(list);
-          setLiveTranscriptionEnabled(settings.live_transcription_enabled);
+          setFolders(folderList);
+          setOpenRouterConfigured(settings.openrouter_api_key_set);
+          if (captureStatus) capture.setNativeRecording(captureStatus.recording);
           log.info("loaded notes", "count=" + list.length);
         }
       } catch (e) {
@@ -96,50 +106,74 @@ function App() {
   useEffect(() => {
     const id = setInterval(async () => {
       try {
-        const h = await api.health();
+        const [h, captureStatus] = await Promise.all([
+          api.health(),
+          api.captureStatus().catch(() => null),
+        ]);
         setSidecarUp(true);
         if (h.model_ready) setModelReady(true);
         else if (modelReady !== false) setModelReady(false);
+        if (captureStatus && !capture.transcribing && !capture.capturePending) {
+          capture.setNativeRecording(captureStatus.recording);
+        }
       } catch {
         setSidecarUp(false);
       }
     }, 5000);
     return () => clearInterval(id);
-  }, [modelReady]);
+  }, [capture.capturePending, capture.transcribing, modelReady]);
 
   // SSE: live updates from the sidecar (notes created/updated/deleted by the
   // hotkey daemon, by another window, or by external tooling). The browser
   // auto-reconnects on connection loss.
   useEffect(() => {
-    const es = new EventSource("http://127.0.0.1:17893/events");
+    const es = new EventSource(sidecarEventsUrl());
 
     const upsertFromServerNote = (sn: ServerNote) => {
-      const note: Note = {
-        id: sn.id,
-        title: sn.title,
-        transcript: sn.transcript,
-        createdAt: new Date(sn.createdAt),
-        durationSec: sn.durationSec,
-        model: sn.model,
-        mode: sn.mode,
-        audioPath: sn.audioPath ?? undefined,
-        tags: sn.tags ?? [],
-        todos: sn.todos ?? [],
-      };
-      setNotes((prev) => {
-        const idx = prev.findIndex((n) => n.id === note.id);
-        if (idx === -1) return [note, ...prev];
-        const next = prev.slice();
-        next[idx] = note;
-        return next;
+      const note = fromServerNote(sn);
+      setNotes((prev) => upsertNote(prev, note));
+      search.setResults((prev) => (prev ? replaceExistingNote(prev, note) : prev));
+    };
+    const upsertFromServerFolder = (sf: ServerFolder) => {
+      const folder = fromServerFolder(sf);
+      setFolders((prev) => {
+        const without = prev.filter((f) => f.id !== folder.id);
+        return [...without, folder].sort((a, b) => a.name.localeCompare(b.name));
       });
     };
+
+    es.onopen = () => setSidecarUp(true);
+    es.onerror = () => setSidecarUp(false);
 
     es.addEventListener("note.created", (e) => {
       try {
         upsertFromServerNote(JSON.parse((e as MessageEvent).data));
       } catch (err) {
         log.warn("event note.created parse failed", err);
+      }
+    });
+    es.addEventListener("folder.created", (e) => {
+      try {
+        upsertFromServerFolder(JSON.parse((e as MessageEvent).data));
+      } catch (err) {
+        log.warn("event folder.created parse failed", err);
+      }
+    });
+    es.addEventListener("folder.updated", (e) => {
+      try {
+        upsertFromServerFolder(JSON.parse((e as MessageEvent).data));
+      } catch (err) {
+        log.warn("event folder.updated parse failed", err);
+      }
+    });
+    es.addEventListener("folder.deleted", (e) => {
+      try {
+        const { id } = JSON.parse((e as MessageEvent).data);
+        setFolders((prev) => prev.filter((f) => f.id !== id));
+        setNotes((prev) => prev.map((n) => (n.folderId === id ? { ...n, folderId: null } : n)));
+        setSelectedFolderId((current) => (current === id ? "all" : current));
+      } catch (err) {
+        log.warn("event folder.deleted parse failed", err);
       }
     });
     es.addEventListener("note.updated", (e) => {
@@ -152,7 +186,8 @@ function App() {
     es.addEventListener("note.deleted", (e) => {
       try {
         const { id } = JSON.parse((e as MessageEvent).data);
-        setNotes((prev) => prev.filter((n) => n.id !== id));
+        setNotes((prev) => removeNote(prev, id));
+        search.setResults((prev) => (prev ? removeNote(prev, id) : prev));
       } catch (err) {
         log.warn("event note.deleted parse failed", err);
       }
@@ -168,126 +203,54 @@ function App() {
     return () => es.close();
   }, []);
 
-  // Surface recorder errors as toasts
-  useEffect(() => {
-    if (recorder.error) showToast(recorder.error);
-  }, [recorder.error, showToast]);
-
-  // Search: debounced fetch
-  useEffect(() => {
-    if (!searchActive) {
-      setSearchResults(null);
-      return;
-    }
-    const q = searchValue.trim();
-    if (!q) {
-      setSearchResults(null);
-      return;
-    }
-    const seq = ++searchSeqRef.current;
-    const t = setTimeout(async () => {
-      try {
-        const r = await api.search(q);
-        if (seq === searchSeqRef.current) setSearchResults(r);
-      } catch (e) {
-        console.error(e);
-      }
-    }, 140);
-    return () => clearTimeout(t);
-  }, [searchValue, searchActive]);
-
   const openNote = (id: string) => {
     setOpenId(id);
-    setView("detail");
   };
 
-  const onStart = useCallback(async () => {
-    // Try one fresh health check before refusing — sidecarUp may be a stale
-    // negative from an earlier transient failure.
-    if (sidecarUp === false) {
-      try {
-        await api.health();
-        setSidecarUp(true);
-      } catch {
-        showToast(
-          "Sidecar isn't responding. Start it: " +
-            "sidecar/.venv/bin/python sidecar/run.py",
-        );
-        return;
-      }
-    }
-    await recorder.start();
-  }, [recorder, sidecarUp, showToast]);
+  const editNote = (id: string) => {
+    setOpenId(id);
+    setEditRequest((n) => n + 1);
+  };
+
+  const onStart = capture.start;
 
   const onStop = useCallback(async () => {
-    const blob = await recorder.stop();
-    if (!blob || blob.size === 0) {
-      showToast("Nothing was recorded.");
+    const t0 = performance.now();
+    const note = await capture.stopAndSave(mode);
+    if (!note) return;
+    const dt = performance.now() - t0;
+    log.info(
+      "recording saved",
+      "ms=" + dt.toFixed(0),
+      "chars=" + note.transcript.length,
+      "tags=" + note.tags.length,
+      "todos=" + note.todos.length,
+    );
+    if (!note.transcript.trim()) {
+      showToast("Couldn't hear anything in that clip.");
       return;
     }
-    setTranscribing(true);
-    log.info("transcribing", "bytes=" + blob.size);
-    const t0 = performance.now();
-    try {
-      const result = await api.transcribe(blob);
-      const dt = performance.now() - t0;
-      log.info(
-        "transcribed",
-        "ms=" + dt.toFixed(0),
-        "chars=" + result.text.length,
-        "tags=" + result.tags.length,
-        "todos=" + result.todos.length,
-      );
-      if (!result.text.trim()) {
-        showToast("Couldn't hear anything in that clip.");
-        return;
+    setNotes((prev) => upsertNote(prev, note));
+    if (mode === "notes") {
+      setOpenId(note.id);
+      setView("library");
+    } else {
+      try {
+        await navigator.clipboard.writeText(note.transcript);
+        showToast("Transcript copied to clipboard.");
+      } catch {
+        showToast("Transcribed — couldn't access clipboard.");
       }
-      const note = await api.createNote({
-        title: result.title,
-        transcript: result.text,
-        language: result.language,
-        model: result.model,
-        mode,
-        duration_sec: result.duration,
-        audio_path: result.audio_path || null,
-        tags: result.tags,
-        todos: result.todos,
-      });
-      setNotes((prev) => [note, ...prev]);
-      if (mode === "notes") {
-        setOpenId(note.id);
-        setView("detail");
-      } else {
-        try {
-          await navigator.clipboard.writeText(result.text);
-          showToast("Transcript copied to clipboard.");
-        } catch {
-          showToast("Transcribed — couldn't access clipboard.");
-        }
-      }
-    } catch (e: unknown) {
-      log.error("transcribe failed", e);
-      showToast(userMessage(e, "Transcription failed."));
-    } finally {
-      setTranscribing(false);
     }
-  }, [mode, recorder, showToast]);
+  }, [capture, mode, showToast]);
 
-  const onCancel = useCallback(() => {
-    recorder.cancel();
-  }, [recorder]);
+  const onCancel = capture.cancel;
 
   const onRecordToggle = () => {
+    if (capture.capturePending) return;
     if (flow === "idle") onStart();
     else if (flow === "recording") onStop();
   };
-
-  const onNoteUpdate = useCallback((updated: Note) => {
-    setNotes((prev) => prev.map((n) => (n.id === updated.id ? updated : n)));
-    setSearchResults((prev) =>
-      prev ? prev.map((n) => (n.id === updated.id ? updated : n)) : prev,
-    );
-  }, []);
 
   const onNoteDelete = useCallback(
     async (id: string) => {
@@ -295,9 +258,9 @@ function App() {
       const wasOpen = openId === id;
       try {
         await api.deleteNote(id);
-        setNotes((prev) => prev.filter((n) => n.id !== id));
-        setSearchResults((prev) =>
-          prev ? prev.filter((n) => n.id !== id) : prev,
+        setNotes((prev) => removeNote(prev, id));
+        search.setResults((prev) =>
+          prev ? removeNote(prev, id) : prev,
         );
         setOpenId(null);
         setView("library");
@@ -306,13 +269,10 @@ function App() {
           onClick: async () => {
             try {
               const restored = await api.restoreNote(id);
-              setNotes((prev) => {
-                if (prev.some((n) => n.id === restored.id)) return prev;
-                return [restored, ...prev];
-              });
+              setNotes((prev) => upsertNote(prev, restored));
               if (wasOpen) {
                 setOpenId(restored.id);
-                setView("detail");
+                setView("library");
               }
               showToast("Restored.");
             } catch (e) {
@@ -328,8 +288,108 @@ function App() {
     [openId, showToast],
   );
 
+  const onNotesDelete = useCallback(
+    async (ids: string[]) => {
+      if (ids.length === 0) return;
+      try {
+        const deleted = await api.bulkDeleteNotes(ids);
+        if (deleted.length === 0) return;
+        const gone = new Set(deleted);
+        if (openId && gone.has(openId)) setOpenId(null);
+        setNotes((prev) => prev.filter((n) => !gone.has(n.id)));
+        search.setResults((prev) =>
+          prev ? prev.filter((n) => !gone.has(n.id)) : prev,
+        );
+        showToast(
+          `${deleted.length} note${deleted.length === 1 ? "" : "s"} moved to trash.`,
+          {
+            label: "Undo",
+            onClick: async () => {
+              try {
+                const restored = await api.bulkRestoreNotes(deleted);
+                setNotes((prev) =>
+                  restored.reduce((acc, note) => upsertNote(acc, note), prev),
+                );
+                showToast("Restored.");
+              } catch (e) {
+                showToast(userMessage(e, "Couldn't restore notes."));
+              }
+            },
+          },
+        );
+      } catch (e) {
+        log.error("bulk delete failed", e);
+        showToast(userMessage(e, "Couldn't delete notes."));
+      }
+    },
+    [openId, search, showToast],
+  );
+
+  const onFolderCreate = useCallback(
+    async (name: string) => {
+      try {
+        const folder = await api.createFolder(name);
+        setFolders((prev) => {
+          const without = prev.filter((f) => f.id !== folder.id);
+          return [...without, folder].sort((a, b) => a.name.localeCompare(b.name));
+        });
+        setSelectedFolderId(folder.id);
+        showToast("Folder created.");
+      } catch (e) {
+        showToast(userMessage(e, "Couldn't create folder."));
+      }
+    },
+    [showToast],
+  );
+
+  const onFolderRename = useCallback(
+    async (id: string, name: string) => {
+      try {
+        const folder = await api.updateFolder(id, name);
+        setFolders((prev) => {
+          const without = prev.filter((f) => f.id !== folder.id);
+          return [...without, folder].sort((a, b) => a.name.localeCompare(b.name));
+        });
+        showToast("Folder renamed.");
+      } catch (e) {
+        showToast(userMessage(e, "Couldn't rename folder."));
+      }
+    },
+    [showToast],
+  );
+
+  const onFolderDelete = useCallback(
+    async (id: string) => {
+      try {
+        await api.deleteFolder(id);
+        setFolders((prev) => prev.filter((f) => f.id !== id));
+        setNotes((prev) => prev.map((n) => (n.folderId === id ? { ...n, folderId: null } : n)));
+        setSelectedFolderId((current) => (current === id ? "all" : current));
+        showToast("Folder removed.");
+      } catch (e) {
+        showToast(userMessage(e, "Couldn't remove folder."));
+      }
+    },
+    [showToast],
+  );
+
+  const onNoteFolderChange = useCallback(
+    async (noteId: string, folderId: string | null) => {
+      try {
+        const note = await api.assignNoteFolder(noteId, folderId);
+        setNotes((prev) => upsertNote(prev, note));
+        search.setResults((prev) => (prev ? upsertNote(prev, note) : prev));
+        showToast(folderId ? "Moved." : "Removed from folder.");
+      } catch (e) {
+        showToast(userMessage(e, "Couldn't move note."));
+      }
+    },
+    [search, showToast],
+  );
+
   const openNoteObj = notes.find((n) => n.id === openId) ?? null;
-  const displayedNotes = searchResults ?? notes;
+  const displayedNotes = filterNotesByFolder(search.displayedNotes, selectedFolderId);
+  const folderCounts = countNotesByFolder(notes);
 
   return (
     <div className="min-h-full">
@@ -338,42 +398,64 @@ function App() {
         onNavigate={(v) => {
           setView(v);
           setOpenId(null);
-          setSearchActive(false);
-          setSearchValue("");
+          search.reset();
         }}
         onRecord={onRecordToggle}
         recording={flow !== "idle"}
-        searchValue={searchValue}
-        onSearchChange={setSearchValue}
-        searchActive={searchActive}
-        onSearchActivate={() => setSearchActive(true)}
-        onSearchDeactivate={() => {
-          setSearchActive(false);
-          setSearchValue("");
-        }}
+        searchValue={search.value}
+        onSearchChange={search.setValue}
+        searchActive={search.active}
+        onSearchActivate={() => search.setActive(true)}
+        onSearchDeactivate={search.reset}
       />
 
       <main>
         {view === "library" && !loading && (
-          <Library notes={displayedNotes} onOpen={openNote} />
-        )}
-        {view === "library" && loading && <LibrarySkeleton />}
-        {view === "detail" && openNoteObj && (
-          <NoteDetail
-            note={openNoteObj}
-            onBack={() => {
-              setView("library");
-              setOpenId(null);
-            }}
-            onUpdate={onNoteUpdate}
+          <Library
+            notes={displayedNotes}
+            allNotesCount={notes.length}
+            folders={folders}
+            selectedFolderId={selectedFolderId}
+            folderCounts={folderCounts}
+            onFolderSelect={setSelectedFolderId}
+            onFolderCreate={onFolderCreate}
+            onFolderRename={onFolderRename}
+            onFolderDelete={onFolderDelete}
+            onOpen={openNote}
+            onEdit={editNote}
             onDelete={onNoteDelete}
-            onToast={showToast}
+            onBulkDelete={onNotesDelete}
+            onOpenTrash={() => {
+              setView("trash");
+              setOpenId(null);
+              search.reset();
+            }}
+            onOpenAsk={() => {
+              setView("ask");
+              setOpenId(null);
+              search.reset();
+            }}
           />
         )}
+        {view === "library" && loading && <LibrarySkeleton />}
         {view === "settings" && (
-          <Settings
+          <Settings onToast={showToast} />
+        )}
+        {view === "trash" && (
+          <Trash
+            onBack={() => setView("library")}
             onToast={showToast}
-            onLiveTranscriptionChange={setLiveTranscriptionEnabled}
+            onRestored={(note) => setNotes((prev) => upsertNote(prev, note))}
+          />
+        )}
+        {view === "ask" && (
+          <AskView
+            onBack={() => setView("library")}
+            openRouterConfigured={openRouterConfigured}
+            onOpenNote={(id) => {
+              setView("library");
+              setOpenId(id);
+            }}
           />
         )}
       </main>
@@ -385,9 +467,34 @@ function App() {
         onModeChange={setMode}
         onStop={onStop}
         onCancel={onCancel}
-        partial={recorder.partial}
-        level={recorder.level}
+        partial=""
+        level={0}
+        autoStopEnabled={false}
       />
+
+      {openNoteObj && view === "library" && (
+        <div
+          className="fixed inset-0 z-40 overflow-auto"
+          style={{
+            background: "var(--color-paper)",
+            borderTop: "1px solid var(--color-rule-soft)",
+          }}
+        >
+          <SafeNoteDetail
+            note={openNoteObj}
+            folders={folders}
+            editRequest={editRequest}
+            onBack={() => setOpenId(null)}
+            onUpdate={(note) => {
+              setNotes((prev) => upsertNote(prev, note));
+              search.setResults((prev) => (prev ? upsertNote(prev, note) : prev));
+            }}
+            onFolderChange={onNoteFolderChange}
+            onDelete={onNoteDelete}
+            onToast={showToast}
+          />
+        </div>
+      )}
 
       {modelReady === false && <ModelLoadingBanner />}
 
@@ -432,6 +539,20 @@ function LibrarySkeleton() {
       ))}
     </div>
   );
+}
+
+function filterNotesByFolder(notes: Note[], folderId: FolderFilter): Note[] {
+  if (folderId === "all") return notes;
+  if (folderId === "uncategorized") return notes.filter((n) => !n.folderId);
+  return notes.filter((n) => n.folderId === folderId);
+}
+
+function countNotesByFolder(notes: Note[]): Record<string, number> {
+  return notes.reduce<Record<string, number>>((acc, note) => {
+    const key = note.folderId || "uncategorized";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
 }
 
 function ModelLoadingBanner() {

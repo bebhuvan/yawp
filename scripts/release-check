@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+"$ROOT/scripts/check"
+
+printf '\n==> Tauri package build\n'
+(
+  cd "$ROOT/voice-app"
+  npm run tauri build
+)
+
+printf '\nRelease checks passed.\n'

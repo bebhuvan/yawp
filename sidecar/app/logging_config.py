@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
-from pathlib import Path
+import os
 from typing import Optional
 
 from . import config
@@ -54,10 +54,12 @@ def configure(name: str = "sidecar", level: Optional[int] = None) -> None:
 
     fmt = _MillisFormatter(_FORMAT, datefmt=_DATEFMT)
 
-    # Stdout — for `tail -f` / running in a terminal
-    sh = logging.StreamHandler()
-    sh.setFormatter(fmt)
-    root.addHandler(sh)
+    quiet_console = os.environ.get("YAWP_QUIET_CONSOLE") == "1"
+    if not quiet_console:
+        # Console stream — for `tail -f` / running in a terminal.
+        sh = logging.StreamHandler()
+        sh.setFormatter(fmt)
+        root.addHandler(sh)
 
     # Rotating file — survives crashes, useful when daemon runs detached
     fh = logging.handlers.RotatingFileHandler(
@@ -73,8 +75,9 @@ def configure(name: str = "sidecar", level: Optional[int] = None) -> None:
     for noisy in ("urllib3", "httpcore", "httpx", "huggingface_hub"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
-    logging.getLogger("voice.config").info(
-        "logging configured: file=%s level=%s",
-        log_path,
-        logging.getLevelName(root.level),
-    )
+    if not quiet_console:
+        logging.getLogger("voice.config").info(
+            "logging configured: file=%s level=%s",
+            log_path,
+            logging.getLevelName(root.level),
+        )

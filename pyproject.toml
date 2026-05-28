@@ -5,3 +5,14 @@
 pythonpath = ["sidecar"]
 testpaths = ["sidecar/tests"]
 addopts = "-q --tb=short"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["sidecar", "tools"]
+exclude = [
+  "sidecar/.venv",
+]
+
+[tool.ruff.lint]
+select = ["E7", "E9", "F"]

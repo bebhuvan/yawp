@@ -1,8 +1,18 @@
-import type { AppSettings, Note, RecordingMode, Todo } from "./types";
+import type { AppSettings, Folder, Note, RecordingMode, SmartMetadata, Todo } from "./types";
 
-const BASE = "http://127.0.0.1:17893";
+const DEFAULT_BASE = "http://127.0.0.1:17893";
+const configuredBase = import.meta.env.VITE_YAWP_SIDECAR_URL;
+export const SIDECAR_BASE = (configuredBase || DEFAULT_BASE).replace(/\/+$/, "");
 
-export const AUDIO_BASE = `${BASE}/audio`;
+export const AUDIO_BASE = `${SIDECAR_BASE}/audio`;
+
+export function sidecarUrl(path: string): string {
+  return `${SIDECAR_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+export function sidecarEventsUrl(): string {
+  return sidecarUrl("/events");
+}
 
 // User-facing error so UI can show a friendly message while logs keep the raw
 // detail. Throw via `failed(...)` from any api method.
@@ -59,7 +69,15 @@ async function call<T>(action: string, init: () => Promise<Response>): Promise<T
   if (!r.ok) {
     await failed(action, r);
   }
-  return r.json() as Promise<T>;
+  try {
+    return (await r.json()) as T;
+  } catch (e) {
+    throw new ApiError(
+      `${capitalize(action)} — invalid response from the sidecar.`,
+      r.status,
+      (e as Error)?.message,
+    );
+  }
 }
 
 export interface ServerNote {
@@ -74,9 +92,20 @@ export interface ServerNote {
   createdAt: string;
   tags?: string[];
   todos?: Todo[];
+  smartMetadata?: SmartMetadata;
+  folderId?: string | null;
+  searchSnippet?: string;
+}
+
+export interface ServerFolder {
+  id: string;
+  name: string;
+  createdAt: string;
+  noteCount: number;
 }
 
 export interface TranscribeResult {
+  request_id: string;
   text: string;
   text_raw: string;
   title: string;
@@ -87,6 +116,13 @@ export interface TranscribeResult {
   audio_path: string;
   tags: string[];
   todos: Todo[];
+  smart_metadata: SmartMetadata;
+  enrichment_status: {
+    requested: boolean;
+    ok: boolean;
+    code?: string | null;
+    message?: string | null;
+  };
 }
 
 export interface GrammarIssue {
@@ -109,7 +145,113 @@ export interface Health {
   openrouter_configured: boolean;
 }
 
-function fromServer(n: ServerNote): Note {
+export interface Diagnostics {
+  host: string;
+  port: number;
+  data_dir: string;
+  audio_dir: string;
+  db_path: string;
+  imports: Record<string, boolean>;
+  tools: Record<string, boolean>;
+  paste: {
+    session: string;
+    selected_tool: string | null;
+    ready: boolean;
+  };
+  daemon: {
+    running: boolean;
+    socket: string;
+    status: string;
+    error?: string;
+    detail?: {
+      state: string;
+      recording_mode: string | null;
+      hotkey_mode: "toggle" | "hold" | null;
+      auto_stop_ms: number;
+      bindings: {
+        hotkey_notes: string | null;
+        hotkey_paste: string | null;
+        hold_key_notes: string | null;
+        hold_key_paste: string | null;
+      };
+      paste_tool: string | null;
+      audio_feedback_enabled?: boolean;
+    } | null;
+  };
+  database: {
+    ready: boolean;
+    path: string;
+    notes_count?: number;
+    error?: string;
+  };
+  settings: {
+    asr_model: string;
+    input_device: number | null;
+    hotkey_mode: "toggle" | "hold";
+    hotkey_notes: string;
+    hotkey_paste: string;
+    hold_key_notes: string;
+    hold_key_paste: string;
+    auto_stop_ms: number;
+    audio_feedback_enabled: boolean;
+    auto_organize_enabled: boolean;
+    auto_organize_min_confidence: number;
+    openrouter_configured: boolean;
+  };
+  model: {
+    configured: string;
+    active_backend: string;
+    active_model?: string;
+    loaded: boolean;
+    restart_required: boolean;
+    device?: string;
+    compute_type?: string;
+    parakeet_ready?: boolean;
+    parakeet_path?: string;
+    error?: string;
+  };
+  microphone: {
+    available: boolean;
+    name?: string;
+    channels?: number;
+    default_samplerate?: number;
+    selected_index?: number | null;
+    error?: string;
+  };
+  port_available: boolean;
+}
+
+export interface AudioInputDevice {
+  index: number;
+  name: string;
+  channels: number;
+  defaultSamplerate?: number;
+  isDefault: boolean;
+  selected: boolean;
+}
+
+export interface CacheItem {
+  id: string;
+  label: string;
+  description: string;
+  bytes: number;
+  count?: number;
+  path?: string;
+  destructive: boolean;
+}
+
+export interface CacheUsage {
+  audio_total_bytes: number;
+  items: CacheItem[];
+}
+
+export interface AskAnswer {
+  answer: string;
+  sources: { id: string; title: string }[];
+  answered: boolean;
+}
+
+export function fromServerNote(n: ServerNote): Note {
   return {
     id: n.id,
     title: n.title,
@@ -121,6 +263,18 @@ function fromServer(n: ServerNote): Note {
     audioPath: n.audioPath ?? undefined,
     tags: n.tags ?? [],
     todos: n.todos ?? [],
+    smartMetadata: n.smartMetadata ?? {},
+    folderId: n.folderId ?? null,
+    searchSnippet: n.searchSnippet,
+  };
+}
+
+export function fromServerFolder(f: ServerFolder): Folder {
+  return {
+    id: f.id,
+    name: f.name,
+    createdAt: new Date(f.createdAt),
+    noteCount: f.noteCount,
   };
 }
 
@@ -132,22 +286,85 @@ export function audioUrl(audioPath?: string | null): string | null {
 }
 
 export const api = {
-  health: () => call<Health>("Health check", () => fetch(`${BASE}/health`)),
+  health: () => call<Health>("Health check", () => fetch(sidecarUrl("/health"))),
+
+  diagnostics: () =>
+    call<Diagnostics>("Diagnostics", () => fetch(sidecarUrl("/diagnostics"))),
+
+  cacheUsage: () =>
+    call<CacheUsage>("Cache usage", () => fetch(sidecarUrl("/cache"))),
+
+  clearCache: (target: string) =>
+    call<{ cleared: string; freed_bytes?: number; count?: number }>(
+      "Clear cache",
+      () =>
+        fetch(sidecarUrl("/cache/clear"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target }),
+        }),
+    ),
 
   async listNotes(): Promise<Note[]> {
     const json = await call<{ notes: ServerNote[] }>(
       "Loading notes",
-      () => fetch(`${BASE}/notes`),
+      () => fetch(sidecarUrl("/notes")),
     );
-    return json.notes.map(fromServer);
+    return json.notes.map(fromServerNote);
+  },
+
+  async listFolders(): Promise<Folder[]> {
+    const json = await call<{ folders: ServerFolder[] }>(
+      "Loading folders",
+      () => fetch(sidecarUrl("/folders")),
+    );
+    return json.folders.map(fromServerFolder);
+  },
+
+  async createFolder(name: string): Promise<Folder> {
+    const data = await call<ServerFolder>(
+      "Creating folder",
+      () =>
+        fetch(sidecarUrl("/folders"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        }),
+    );
+    return fromServerFolder(data);
+  },
+
+  async updateFolder(id: string, name: string): Promise<Folder> {
+    const data = await call<ServerFolder>(
+      "Renaming folder",
+      () =>
+        fetch(sidecarUrl(`/folders/${id}`), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        }),
+    );
+    return fromServerFolder(data);
+  },
+
+  async deleteFolder(id: string): Promise<void> {
+    let r: Response;
+    try {
+      r = await fetch(sidecarUrl(`/folders/${id}`), { method: "DELETE" });
+    } catch (e) {
+      throw new ApiError(friendly("Delete folder", 0, ""), 0, (e as Error)?.message);
+    }
+    if (!r.ok && r.status !== 204) {
+      await failed("Delete folder", r);
+    }
   },
 
   async search(q: string): Promise<Note[]> {
     const json = await call<{ notes: ServerNote[] }>(
       "Search",
-      () => fetch(`${BASE}/search?q=${encodeURIComponent(q)}`),
+      () => fetch(sidecarUrl(`/search?q=${encodeURIComponent(q)}`)),
     );
-    return json.notes.map(fromServer);
+    return json.notes.map(fromServerNote);
   },
 
   async transcribe(audio: Blob): Promise<TranscribeResult> {
@@ -155,8 +372,45 @@ export const api = {
     fd.append("audio", audio, "audio.wav");
     return call<TranscribeResult>(
       "Transcription",
-      () => fetch(`${BASE}/transcribe`, { method: "POST", body: fd }),
+      () => fetch(sidecarUrl("/transcribe"), { method: "POST", body: fd }),
     );
+  },
+
+  captureStatus: () =>
+    call<{ recording: boolean }>(
+      "Recorder status",
+      () => fetch(sidecarUrl("/capture/status")),
+    ),
+
+  captureStart: () =>
+    call<{ recording: boolean }>(
+      "Starting recorder",
+      () => fetch(sidecarUrl("/capture/start"), { method: "POST" }),
+    ),
+
+  captureCancel: () =>
+    call<{ recording: boolean }>(
+      "Cancel recording",
+      () => fetch(sidecarUrl("/capture/cancel"), { method: "POST" }),
+    ),
+
+  captureStop: () =>
+    call<TranscribeResult>(
+      "Transcription",
+      () => fetch(sidecarUrl("/capture/stop"), { method: "POST" }),
+    ),
+
+  async captureStopAndSave(mode: RecordingMode): Promise<Note> {
+    const data = await call<ServerNote>(
+      "Saving recording",
+      () =>
+        fetch(sidecarUrl("/capture/stop-and-save"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        }),
+    );
+    return fromServerNote(data);
   },
 
   async createNote(input: {
@@ -169,17 +423,19 @@ export const api = {
     audio_path?: string | null;
     tags?: string[];
     todos?: Todo[];
+    smart_metadata?: SmartMetadata;
+    folder_id?: string | null;
   }): Promise<Note> {
     const data = await call<ServerNote>(
       "Saving note",
       () =>
-        fetch(`${BASE}/notes`, {
+        fetch(sidecarUrl("/notes"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
         }),
     );
-    return fromServer(data);
+    return fromServerNote(data);
   },
 
   async updateNote(
@@ -189,24 +445,38 @@ export const api = {
       transcript?: string;
       tags?: string[];
       todos?: Todo[];
+      smart_metadata?: SmartMetadata;
     },
   ): Promise<Note> {
     const data = await call<ServerNote>(
       "Saving changes",
       () =>
-        fetch(`${BASE}/notes/${id}`, {
+        fetch(sidecarUrl(`/notes/${id}`), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(patch),
         }),
     );
-    return fromServer(data);
+    return fromServerNote(data);
+  },
+
+  async assignNoteFolder(noteId: string, folderId: string | null): Promise<Note> {
+    const data = await call<ServerNote>(
+      "Moving note",
+      () =>
+        fetch(sidecarUrl(`/notes/${noteId}/folder`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ folder_id: folderId }),
+        }),
+    );
+    return fromServerNote(data);
   },
 
   async deleteNote(id: string): Promise<void> {
     let r: Response;
     try {
-      r = await fetch(`${BASE}/notes/${id}`, { method: "DELETE" });
+      r = await fetch(sidecarUrl(`/notes/${id}`), { method: "DELETE" });
     } catch (e) {
       throw new ApiError(friendly("Delete", 0, ""), 0, (e as Error)?.message);
     }
@@ -218,16 +488,68 @@ export const api = {
   async restoreNote(id: string): Promise<Note> {
     const data = await call<ServerNote>(
       "Undo delete",
-      () => fetch(`${BASE}/notes/${id}/restore`, { method: "POST" }),
+      () => fetch(sidecarUrl(`/notes/${id}/restore`), { method: "POST" }),
     );
-    return fromServer(data);
+    return fromServerNote(data);
   },
+
+  async bulkDeleteNotes(ids: string[]): Promise<string[]> {
+    const data = await call<{ deleted: string[] }>(
+      "Delete notes",
+      () =>
+        fetch(sidecarUrl("/notes/bulk-delete"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        }),
+    );
+    return data.deleted;
+  },
+
+  async bulkRestoreNotes(ids: string[]): Promise<Note[]> {
+    const data = await call<{ notes: ServerNote[] }>(
+      "Undo delete",
+      () =>
+        fetch(sidecarUrl("/notes/bulk-restore"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids }),
+        }),
+    );
+    return data.notes.map(fromServerNote);
+  },
+
+  async listTrash(): Promise<Note[]> {
+    const data = await call<{ notes: ServerNote[] }>(
+      "Loading trash",
+      () => fetch(sidecarUrl("/notes/trash")),
+    );
+    return data.notes.map(fromServerNote);
+  },
+
+  async purgeNote(id: string): Promise<void> {
+    let r: Response;
+    try {
+      r = await fetch(sidecarUrl(`/notes/${id}/purge`), { method: "POST" });
+    } catch (e) {
+      throw new ApiError(friendly("Delete forever", 0, ""), 0, (e as Error)?.message);
+    }
+    if (!r.ok && r.status !== 204) {
+      await failed("Delete forever", r);
+    }
+  },
+
+  emptyTrash: () =>
+    call<{ purged: number }>(
+      "Empty trash",
+      () => fetch(sidecarUrl("/notes/empty-trash"), { method: "POST" }),
+    ),
 
   polish: (text: string, noteId?: string) =>
     call<{ text: string; source: "openrouter" | "cleanup-only" }>(
       "Polish",
       () =>
-        fetch(`${BASE}/polish`, {
+        fetch(sidecarUrl("/polish"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, note_id: noteId }),
@@ -238,7 +560,7 @@ export const api = {
     call<{ issues: GrammarIssue[] }>(
       "Grammar check",
       () =>
-        fetch(`${BASE}/grammar`, {
+        fetch(sidecarUrl("/grammar"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text }),
@@ -249,7 +571,7 @@ export const api = {
     call<{ text: string }>(
       "Applying corrections",
       () =>
-        fetch(`${BASE}/grammar/apply`, {
+        fetch(sidecarUrl("/grammar/apply"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, note_id: noteId }),
@@ -259,16 +581,24 @@ export const api = {
   async extractTodos(noteId: string): Promise<Note> {
     const data = await call<ServerNote>(
       "Find action items",
-      () => fetch(`${BASE}/notes/${noteId}/extract-todos`, { method: "POST" }),
+      () => fetch(sidecarUrl(`/notes/${noteId}/extract-todos`), { method: "POST" }),
     );
-    return fromServer(data);
+    return fromServerNote(data);
+  },
+
+  async organizeNote(noteId: string): Promise<Note> {
+    const data = await call<ServerNote>(
+      "Organizing note",
+      () => fetch(sidecarUrl(`/notes/${noteId}/organize`), { method: "POST" }),
+    );
+    return fromServerNote(data);
   },
 
   exportMarkdown: (dest: string) =>
     call<{ dest: string; count: number }>(
       "Export",
       () =>
-        fetch(`${BASE}/export/markdown`, {
+        fetch(sidecarUrl("/export/markdown"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ dest }),
@@ -276,21 +606,36 @@ export const api = {
     ),
 
   getSettings: () =>
-    call<AppSettings>("Loading settings", () => fetch(`${BASE}/settings`)),
+    call<AppSettings>("Loading settings", () => fetch(sidecarUrl("/settings"))),
+
+  inputDevices: () =>
+    call<{ devices: AudioInputDevice[]; selected: number | null }>(
+      "Loading microphones",
+      () => fetch(sidecarUrl("/audio/input-devices")),
+    ),
 
   updateSettings: (
     patch: Partial<{
       asr_model: string;
+      input_device: number | null;
       cleanup_enabled: boolean;
       voice_commands_enabled: boolean;
-      live_transcription_enabled: boolean;
       auto_tag_enabled: boolean;
       extract_todos_enabled: boolean;
+      auto_organize_enabled: boolean;
+      auto_organize_min_confidence: number;
+      categorization_prompt: string;
       openrouter_api_key: string;
       openrouter_model: string;
       max_tags: number;
       hotkey_mode: "toggle" | "hold";
+      hotkey_notes: string;
+      hotkey_paste: string;
+      hold_key_notes: string;
+      hold_key_paste: string;
       auto_stop_ms: number;
+      audio_feedback_enabled: boolean;
+      paste_use_clipboard: boolean;
       export_path: string;
       auto_export_enabled: boolean;
     }>,
@@ -298,10 +643,38 @@ export const api = {
     call<AppSettings>(
       "Saving setting",
       () =>
-        fetch(`${BASE}/settings`, {
+        fetch(sidecarUrl("/settings"), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(patch),
+        }),
+    ),
+
+  reorganizeNotes: () =>
+    call<{ organized: number }>(
+      "Reorganize notes",
+      () => fetch(sidecarUrl("/notes/reorganize"), { method: "POST" }),
+    ),
+
+  askNotes: (question: string) =>
+    call<AskAnswer>(
+      "Ask your notes",
+      () =>
+        fetch(sidecarUrl("/ask"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question }),
+        }),
+    ),
+
+  testOpenRouter: (input: { api_key?: string; model?: string }) =>
+    call<{ ok: boolean; model: string; response: string }>(
+      "Testing OpenRouter",
+      () =>
+        fetch(sidecarUrl("/settings/openrouter/test"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
         }),
     ),
 };

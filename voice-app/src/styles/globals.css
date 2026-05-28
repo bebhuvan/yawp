@@ -5,22 +5,32 @@
 @import "@fontsource-variable/jetbrains-mono/index.css";
 
 @theme {
-  /* Editorial Warm — paper & ink. Beige base preserved (it's identity);
-     accent lifted from #A0381C to a livelier #C44A2C, plus a deeper
-     "accent-ink" for hover/active states that read as deliberate. */
-  --color-paper: #f7f3ea;
-  --color-paper-deep: #f0eadb;
-  --color-paper-edge: #ebe3d0;
-  --color-ink: #1a1612;
-  --color-ink-soft: #4a3f35;
-  --color-ink-quiet: #8b7d6f;
-  --color-ink-faint: #b6a994;
-  --color-rule: #d9cfb8;
-  --color-rule-soft: #e6dcc6;
-  --color-accent: #c44a2c;
-  --color-accent-ink: #952f15;
-  --color-accent-soft: #f5dccf;
-  --color-accent-glow: rgba(196, 74, 44, 0.12);
+  /* Notion-white — off-white paper, deep ink, one semantic red.
+     The red exists only for the live recording state. Everywhere else
+     is paper, ink, mute, and rule. If a button needs emphasis, it earns
+     it through type weight, not color. */
+  --color-paper: #fbfbfa;
+  --color-paper-deep: #f4f3ef;
+  --color-paper-edge: #ebeae5;
+  --color-ink: #191919;
+  --color-ink-soft: #3a3a37;
+  --color-ink-quiet: #7d7b75;
+  --color-ink-faint: #b3b1aa;
+  --color-rule: #d8d6cf;
+  --color-rule-soft: #ecebe5;
+  /* Reserved exclusively for live recording state.
+     Do not use for emphasis, apply buttons, links, highlights, or success
+     states. If you find yourself reaching for it for anything else, reach
+     for ink instead. */
+  --color-accent: #c8302e;
+  --color-accent-ink: #9c1e1c;
+  --color-accent-soft: #f8e3e2;
+  --color-accent-glow: rgba(200, 48, 46, 0.10);
+  --shadow-hairline: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --shadow-popover:
+    0 14px 40px -22px rgba(20, 20, 18, 0.26),
+    0 4px 14px -10px rgba(20, 20, 18, 0.10);
+  --ease-precise: cubic-bezier(0.2, 0.7, 0.2, 1);
 
   --font-display: "Fraunces Variable", Georgia, "Times New Roman", serif;
   --font-serif: "Source Serif 4 Variable", Georgia, "Times New Roman", serif;
@@ -47,31 +57,20 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   font-feature-settings: "kern", "liga", "calt", "onum";
+  /* Hanging punctuation — quotes and stops settle outside the column edge,
+     so headings and paragraphs optically align with the rule. */
+  hanging-punctuation: first last;
   /* Prevent scrollbar-toggle layout shift when content height changes */
   overflow-y: scroll;
   scrollbar-gutter: stable;
-  /* Subtle paper texture using a soft layered gradient */
-  background-image:
-    radial-gradient(
-      ellipse at 20% 0%,
-      rgba(160, 56, 28, 0.025) 0%,
-      transparent 55%
-    ),
-    radial-gradient(
-      ellipse at 100% 100%,
-      rgba(74, 63, 53, 0.025) 0%,
-      transparent 50%
-    );
-  background-attachment: fixed;
   user-select: none;
 }
 
 ::selection {
-  background: var(--color-accent-soft);
+  background: rgba(25, 25, 25, 0.10);
   color: var(--color-ink);
 }
 
-/* Smooth scrolling but no scrollbar arrows */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -87,7 +86,7 @@ body {
   background: var(--color-rule);
 }
 
-/* Drag region for the Tauri window */
+/* Tauri drag regions */
 .drag {
   -webkit-app-region: drag;
 }
@@ -95,19 +94,29 @@ body {
   -webkit-app-region: no-drag;
 }
 
-/* Editorial display heading shortcut */
+/* Readable text the user can select with the mouse and copy. The body sets
+   user-select: none so app chrome (buttons, rails, drag regions) feels native;
+   this opts specific content back in. */
+.selectable,
+.selectable * {
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: auto;
+}
+
+/* Editorial display headings — Fraunces, slight optical sizing. */
 .display {
   font-family: var(--font-display);
-  font-variation-settings: "opsz" 144, "SOFT" 50, "wght" 400;
-  letter-spacing: -0.015em;
+  font-variation-settings: "opsz" 144, "SOFT" 50, "wght" 360;
+  letter-spacing: -0.018em;
 }
 .display-tight {
   font-family: var(--font-display);
-  font-variation-settings: "opsz" 144, "SOFT" 30, "wght" 500;
-  letter-spacing: -0.025em;
+  font-variation-settings: "opsz" 144, "SOFT" 30, "wght" 450;
+  letter-spacing: -0.028em;
 }
 
-/* Small caps utility for editorial labels */
+/* Small caps eyebrow — mono, wide-tracked. Used for marginalia and meta. */
 .eyebrow {
   font-family: var(--font-mono);
   font-size: 10.5px;
@@ -123,22 +132,126 @@ body {
   font-feature-settings: "tnum";
 }
 
-/* Hairline rule */
 .rule {
   border-color: var(--color-rule);
 }
 
-/* Subtle hover state for list rows */
-.row-hover {
-  transition: background-color 220ms ease-out;
+/* Marginalia — mono numerals in the gutter (date, time, duration). */
+.marginalia {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--color-ink-quiet);
+  line-height: 1.5;
 }
-.row-hover:hover {
-  background-color: rgba(0, 0, 0, 0.018);
+.marginalia-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--color-ink-quiet);
+  line-height: 1.4;
 }
 
-/* Keyboard focus — a soft hairline ring offset from the element. We hide it
-   on mouse interaction (:focus-visible only) so the design stays clean for
-   pointer users while keyboard nav gets a real signal. */
+/* Quiet row hover — no background fill, no shadow. The title shifts to
+   full ink, everything else stays still. Apple/Notion: hover is a hint,
+   not a paint job. */
+.row-hover-zone {
+  cursor: pointer;
+}
+.row-hover-zone .row-title {
+  color: var(--color-ink-soft);
+  transition: color 200ms var(--ease-precise);
+}
+.row-hover-zone:hover .row-title {
+  color: var(--color-ink);
+}
+
+.row-actions {
+  opacity: 0;
+  transition: opacity 200ms var(--ease-precise);
+}
+.row-hover-zone:hover .row-actions,
+.row-hover-zone:focus-within .row-actions {
+  opacity: 1;
+}
+
+/* Surface utilities — pure paper, hairline rule, no warm shadow tint. */
+.surface {
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule-soft);
+}
+.surface-raised {
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule-soft);
+  box-shadow: var(--shadow-popover);
+}
+
+.pill-control {
+  min-height: 34px;
+  border-radius: 999px;
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule-soft);
+  box-shadow: var(--shadow-hairline);
+}
+
+.rail-control {
+  min-height: 30px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.rail-control:hover,
+.rail-control:focus-visible {
+  background: var(--color-paper-deep);
+  border-color: var(--color-rule-soft);
+}
+
+.search-rail {
+  min-height: 30px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  border-bottom-color: var(--color-rule-soft);
+  background: transparent;
+}
+.search-rail:focus-within {
+  border-color: var(--color-rule-soft);
+  background: var(--color-paper-deep);
+}
+
+.text-action {
+  transition:
+    color 160ms var(--ease-precise),
+    opacity 160ms var(--ease-precise),
+    background-color 160ms var(--ease-precise),
+    border-color 160ms var(--ease-precise);
+}
+
+.icon-action {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 3px;
+  color: var(--color-ink-quiet);
+  border: 1px solid transparent;
+  transition:
+    color 160ms var(--ease-precise),
+    background-color 160ms var(--ease-precise),
+    border-color 160ms var(--ease-precise),
+    opacity 160ms var(--ease-precise);
+}
+.icon-action:hover,
+.icon-action:focus-visible {
+  color: var(--color-ink);
+  background: var(--color-paper-deep);
+  border-color: var(--color-rule-soft);
+}
+
+/* Focus ring — ink, not accent. Red is for recording only. */
 button,
 [role="button"],
 a,
@@ -155,14 +268,12 @@ input:focus-visible,
 textarea:focus-visible,
 select:focus-visible,
 [tabindex]:focus-visible {
-  outline: 1.5px solid var(--color-accent);
+  outline: 1.5px solid var(--color-ink);
   outline-offset: 3px;
   border-radius: inherit;
 }
 
-/* Editorial section numeral — small caps roman numeral floated as marginalia.
-   Used in Settings to give the long page a sense of chapters without being
-   loud about it. */
+/* Editorial section numeral — kept for Settings chapter feel. */
 .numeral {
   font-family: var(--font-display);
   font-variation-settings: "opsz" 144, "SOFT" 50, "wght" 400;
@@ -172,7 +283,7 @@ select:focus-visible,
   letter-spacing: 0.02em;
 }
 
-/* Recording pulse — gentle, not throbbing */
+/* Recording pulse — gentle. Only ever applied to the live-recording dot. */
 @keyframes inkPulse {
   0%,
   100% {
@@ -180,16 +291,15 @@ select:focus-visible,
     transform: scale(1);
   }
   50% {
-    opacity: 0.65;
-    transform: scale(0.9);
+    opacity: 0.55;
+    transform: scale(0.86);
   }
 }
 .pulse-ink {
-  animation: inkPulse 1.8s ease-in-out infinite;
+  animation: inkPulse 1.6s ease-in-out infinite;
 }
 
-/* Skeleton shimmer — quiet, paper-coloured, no rainbow gradient. Used while
-   notes load. */
+/* Skeleton shimmer — quiet, paper-coloured, no rainbow gradient. */
 @keyframes skeletonShimmer {
   0% {
     background-position: -180px 0;
@@ -210,7 +320,6 @@ select:focus-visible,
   border-radius: 2px;
 }
 
-/* Toast slide-in from below */
 @keyframes toastIn {
   from {
     opacity: 0;
@@ -225,7 +334,6 @@ select:focus-visible,
   animation: toastIn 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
-/* Soft draw-down used by the silence countdown bar */
 @keyframes silenceDrain {
   from {
     transform: scaleX(1);
@@ -235,31 +343,37 @@ select:focus-visible,
   }
 }
 
-/* Page entrance: a slow soft reveal */
-@keyframes pageIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 .page-in {
-  animation: pageIn 700ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: none;
 }
 
-@keyframes itemIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 .item-in {
-  animation: itemIn 500ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: none;
+}
+
+/* Compatibility shims for components not yet rebuilt. The current
+   row-hover / note-actions classes are kept so TopBar, Recorder, and
+   Settings continue to render correctly while we iterate on the
+   Library + NoteDetail surfaces. */
+.row-hover {
+  transition:
+    background-color 180ms var(--ease-precise),
+    box-shadow 180ms var(--ease-precise),
+    transform 180ms var(--ease-precise);
+}
+.row-hover:hover {
+  background-color: var(--color-paper-deep);
+}
+
+.note-actions {
+  opacity: 0;
+  transform: translateY(-1px);
+  transition:
+    opacity 160ms var(--ease-precise),
+    transform 160ms var(--ease-precise);
+}
+.row-hover:hover .note-actions,
+.row-hover:focus-within .note-actions {
+  opacity: 1;
+  transform: translateY(0);
 }

@@ -21,7 +21,11 @@ fail() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 # --- 1. Prereq check ------------------------------------------------------
 step "Checking prerequisites"
 missing=()
-for cmd in cargo node npm python3 sudo systemctl; do
+# sudo is intentionally not required here — it's only used for the optional
+# .deb install path, which is gated on `command -v sudo` below. Systems with
+# large uids (and anyone without sudo) install via the AppImage + --user
+# systemd path, which needs no root at all.
+for cmd in cargo node npm python3 systemctl; do
   command -v "$cmd" >/dev/null || missing+=("$cmd")
 done
 if (( ${#missing[@]} )); then
@@ -38,14 +42,39 @@ else
     warn "xdotool not found. Paste mode won't work. Install: sudo apt install xdotool"
 fi
 
-# --- 2. Sidecar venv ------------------------------------------------------
-if [[ ! -x "$SIDECAR/.venv/bin/python" ]]; then
-  step "Creating sidecar Python venv"
-  python3 -m venv "$SIDECAR/.venv"
-  "$SIDECAR/.venv/bin/pip" install --upgrade pip
-  "$SIDECAR/.venv/bin/pip" install -r "$SIDECAR/requirements.txt"
+# Clipboard tool — optional, makes paste mode deliver long dictations instantly
+# (instead of typing them out). Paste mode still works without it (it types).
+if [[ "$session" == "wayland" ]]; then
+  command -v wl-copy >/dev/null || \
+    warn "wl-clipboard not found — paste mode will type instead of paste. Install: sudo apt install wl-clipboard"
 else
-  step "Sidecar venv already present (skipping)"
+  command -v xclip >/dev/null || \
+    warn "xclip not found — paste mode will type long text out slowly. For instant paste: sudo apt install xclip"
+fi
+
+# --- 2. Sidecar venv ------------------------------------------------------
+# Prefer uv (much faster resolution + install of the heavy ML deps) when it is
+# available; otherwise fall back to the stdlib venv + pip. Either path yields
+# the same $SIDECAR/.venv/bin/python that the systemd units below point at.
+if command -v uv >/dev/null 2>&1; then
+  if [[ ! -x "$SIDECAR/.venv/bin/python" ]]; then
+    step "Creating sidecar Python venv (uv)"
+    uv venv "$SIDECAR/.venv"
+  else
+    step "Sidecar venv already present"
+  fi
+  step "Installing sidecar Python requirements (uv)"
+  uv pip install --python "$SIDECAR/.venv/bin/python" -r "$SIDECAR/requirements.txt"
+else
+  if [[ ! -x "$SIDECAR/.venv/bin/python" ]]; then
+    step "Creating sidecar Python venv"
+    python3 -m venv "$SIDECAR/.venv"
+    "$SIDECAR/.venv/bin/pip" install --upgrade pip
+  else
+    step "Sidecar venv already present"
+  fi
+  step "Installing sidecar Python requirements"
+  "$SIDECAR/.venv/bin/pip" install -r "$SIDECAR/requirements.txt"
 fi
 
 # --- 3. Frontend deps -----------------------------------------------------
@@ -67,7 +96,7 @@ APPIMAGE=$(ls -t "$APP/src-tauri/target/release/bundle/appimage/"*.AppImage 2>/d
 # overflow on systems where the user's uid is more than 6 digits (corporate
 # LDAP-style ids). Detect that and fall back to the AppImage.
 USE_APPIMAGE=0
-if [[ -n "$DEB" ]] && (( $(id -u) <= 999999 )) && (( $(id -g) <= 999999 )); then
+if [[ -n "$DEB" ]] && command -v sudo >/dev/null && (( $(id -u) <= 999999 )) && (( $(id -g) <= 999999 )); then
   step "Installing $DEB (sudo)"
   if ! sudo dpkg -i "$DEB"; then
     sudo apt-get install -fy || true
@@ -79,6 +108,8 @@ if [[ -n "$DEB" ]] && (( $(id -u) <= 999999 )) && (( $(id -g) <= 999999 )); then
 else
   if [[ -z "$DEB" ]]; then
     warn "No .deb produced — using AppImage."
+  elif ! command -v sudo >/dev/null; then
+    warn "sudo not available — using AppImage (no root needed)."
   else
     warn "Your uid/gid is too large for the .deb format — using AppImage."
   fi
@@ -93,8 +124,12 @@ if (( USE_APPIMAGE )); then
   mkdir -p "$HOME/.local/bin" \
            "$HOME/.local/share/applications" \
            "$HOME/.local/share/icons/hicolor/256x256/apps"
-  cp "$APPIMAGE" "$HOME/.local/bin/Yawp.AppImage"
-  chmod +x "$HOME/.local/bin/Yawp.AppImage"
+  # Atomic replace via a temp file + rename, so a re-install succeeds even while
+  # the current Yawp is running (a plain `cp` over a running AppImage fails with
+  # "Text file busy"). The live process keeps its old copy until relaunch.
+  cp "$APPIMAGE" "$HOME/.local/bin/Yawp.AppImage.new"
+  chmod +x "$HOME/.local/bin/Yawp.AppImage.new"
+  mv -f "$HOME/.local/bin/Yawp.AppImage.new" "$HOME/.local/bin/Yawp.AppImage"
   cp "$APP/src-tauri/icons/128x128@2x.png" \
      "$HOME/.local/share/icons/hicolor/256x256/apps/yawp.png"
   cat > "$HOME/.local/share/applications/yawp.desktop" <<DESKTOP
@@ -102,7 +137,7 @@ if (( USE_APPIMAGE )); then
 Type=Application
 Name=Yawp
 Comment=Local-first voice dictation
-Exec=$HOME/.local/bin/Yawp.AppImage %U
+Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 $HOME/.local/bin/Yawp.AppImage %U
 Icon=yawp
 Terminal=false
 Categories=Utility;AudioVideo;
@@ -112,6 +147,18 @@ DESKTOP
   update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
   gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 fi
+
+# Install the operational CLI regardless of bundle type. It points back to this
+# checkout, matching the sidecar service units below.
+step "Installing yawp CLI → ~/.local/bin/yawp"
+mkdir -p "$HOME/.local/bin"
+cat > "$HOME/.local/bin/yawp" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export YAWP_ROOT="$ROOT"
+exec "$ROOT/scripts/yawp" "\$@"
+EOF
+chmod +x "$HOME/.local/bin/yawp"
 
 # --- 5. systemd user services --------------------------------------------
 step "Writing systemd user units"
@@ -162,10 +209,14 @@ WantedBy=graphical-session.target
 EOF
 
 # --- 6. Enable + start ----------------------------------------------------
-step "Enabling and starting services"
+# `enable` sets autostart on login; `restart` (rather than `start`) ensures a
+# re-install actually picks up updated sidecar/daemon code instead of leaving
+# the previously-running processes in place.
+step "Enabling and (re)starting services"
 systemctl --user daemon-reload
-systemctl --user enable --now yawp-sidecar.service
-systemctl --user enable --now yawp-daemon.service
+systemctl --user enable yawp-sidecar.service yawp-daemon.service
+systemctl --user restart yawp-sidecar.service
+systemctl --user restart yawp-daemon.service
 
 # --- 7. Verify ------------------------------------------------------------
 sleep 2

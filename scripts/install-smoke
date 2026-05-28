@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+require_file() {
+  local path="$1"
+  if [[ ! -f "$ROOT/$path" ]]; then
+    printf 'Missing required installer input: %s\n' "$path" >&2
+    exit 1
+  fi
+}
+
+require_dir() {
+  local path="$1"
+  if [[ ! -d "$ROOT/$path" ]]; then
+    printf 'Missing required installer input directory: %s\n' "$path" >&2
+    exit 1
+  fi
+}
+
+for script in \
+  install.sh \
+  scripts/yawp \
+  scripts/uninstall \
+  scripts/doctor \
+  scripts/debug-bundle \
+  scripts/release-check
+do
+  require_file "$script"
+  bash -n "$ROOT/$script"
+done
+
+require_file "sidecar/run.py"
+require_file "sidecar/daemon.py"
+require_file "sidecar/requirements.txt"
+require_file "voice-app/package.json"
+require_file "voice-app/src-tauri/Cargo.toml"
+require_file "voice-app/src-tauri/tauri.conf.json"
+require_dir "voice-app/src-tauri/icons"
+
+if ! grep -q "yawp-sidecar.service" "$ROOT/install.sh"; then
+  printf 'install.sh does not define yawp-sidecar.service\n' >&2
+  exit 1
+fi
+
+if ! grep -q "yawp-daemon.service" "$ROOT/install.sh"; then
+  printf 'install.sh does not define yawp-daemon.service\n' >&2
+  exit 1
+fi
+
+if ! grep -q "ExecStart=.*run.py" "$ROOT/install.sh"; then
+  printf 'sidecar systemd unit does not start sidecar/run.py\n' >&2
+  exit 1
+fi
+
+if ! grep -q "ExecStart=.*daemon.py" "$ROOT/install.sh"; then
+  printf 'daemon systemd unit does not start sidecar/daemon.py\n' >&2
+  exit 1
+fi
+
+printf 'Installer smoke checks passed.\n'

@@ -39,6 +39,8 @@ def _filename(note: db.NoteRow) -> str:
 
 def _frontmatter(note: db.NoteRow) -> str:
     tags = "[" + ", ".join(note.tags) + "]" if note.tags else "[]"
+    folder_row = db.get_folder(note.folder_id) if note.folder_id else None
+    folder = folder_row.name if folder_row else ""
     return (
         "---\n"
         f"id: {note.id}\n"
@@ -48,6 +50,9 @@ def _frontmatter(note: db.NoteRow) -> str:
         f"model: {note.model}\n"
         f"mode: {note.mode}\n"
         f"tags: {tags}\n"
+        f"folder: {_escape(folder)}\n"
+        f"kind: {_escape(str(note.smart_metadata.get('kind') or ''))}\n"
+        f"collection: {_escape(str(note.smart_metadata.get('collection') or ''))}\n"
         "---\n\n"
     )
 
@@ -74,7 +79,11 @@ def export_all(dest_dir: str) -> dict:
     written = 0
     for note in notes:
         path = dest / _filename(note)
-        body = _frontmatter(note) + note.transcript.rstrip() + "\n"
+        summary = str(note.smart_metadata.get("summary") or "").strip()
+        body = _frontmatter(note)
+        if summary:
+            body += f"> {summary}\n\n"
+        body += note.transcript.rstrip() + "\n"
         path.write_text(body, encoding="utf-8")
         written += 1
 

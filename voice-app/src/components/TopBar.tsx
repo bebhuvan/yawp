@@ -1,9 +1,9 @@
+import { Mic, Settings as SettingsIcon, Square } from "lucide-react";
 import { longDate } from "../lib/utils";
-import { DotIndicator } from "./DotIndicator";
 import { SearchBox } from "./SearchBox";
 
 interface TopBarProps {
-  view: "library" | "settings" | "detail";
+  view: "library" | "settings" | "trash" | "ask";
   onNavigate: (v: "library" | "settings") => void;
   onRecord: () => void;
   recording: boolean;
@@ -28,13 +28,13 @@ export function TopBar({
   const today = longDate(new Date());
 
   return (
-    <header className="drag relative z-20 pt-9 pb-7">
+    <header className="relative z-20 pt-8 pb-7">
       <div className="mx-auto flex max-w-[860px] items-end justify-between px-12">
-        <div>
+        <div className="drag">
           <div className="flex items-baseline gap-2.5">
             <button
               onClick={() => onNavigate("library")}
-              className="no-drag display-tight text-[28px] text-ink leading-none cursor-pointer transition-opacity hover:opacity-70"
+              className="no-drag display-tight text-[28px] text-ink leading-none cursor-pointer text-action hover:opacity-70"
               style={{ letterSpacing: "-0.025em" }}
             >
               Yawp
@@ -56,7 +56,7 @@ export function TopBar({
           <div className="mt-2 eyebrow">{today}</div>
         </div>
 
-        <nav className="no-drag flex items-center gap-7">
+        <nav className="no-drag flex items-center gap-4">
           {/* Always reserve the search slot's width so the right-side nav
               doesn't shift when navigating between library and settings.
               SearchBox itself is hidden on non-library views. */}
@@ -77,23 +77,26 @@ export function TopBar({
           </div>
           <button
             onClick={() => onNavigate("settings")}
-            className={`eyebrow transition-colors cursor-pointer ${
+            className={`rail-control text-action flex items-center gap-2 px-2.5 cursor-pointer ${
               view === "settings"
                 ? "text-ink"
                 : "text-ink-quiet hover:text-ink-soft"
             }`}
+            aria-label="Open settings"
           >
+            <SettingsIcon size={13} strokeWidth={1.7} aria-hidden />
             Settings
           </button>
           <button
             onClick={onRecord}
-            className="no-drag group flex items-center gap-2.5 cursor-pointer"
+            className="no-drag rail-control text-action group flex items-center gap-2.5 px-2.5 cursor-pointer"
             aria-label={recording ? "Stop recording" : "Start recording"}
           >
-            <DotIndicator
-              active={recording}
-              color={recording ? "var(--color-accent)" : "var(--color-ink)"}
-            />
+            {recording ? (
+              <Square size={12} strokeWidth={1.8} fill="var(--color-accent)" color="var(--color-accent)" aria-hidden />
+            ) : (
+              <Mic size={14} strokeWidth={1.8} color="var(--color-ink)" aria-hidden />
+            )}
             <span
               className="font-serif text-[15px] transition-colors"
               style={{

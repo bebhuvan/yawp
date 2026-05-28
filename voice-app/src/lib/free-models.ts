@@ -1,8 +1,8 @@
 // Curated free OpenRouter models. Verified against
 // https://openrouter.ai/api/v1/models (filtered to ids ending `:free`).
 //
-// Ordered by usefulness for short-text rewriting (the Polish + auto-tag +
-// TODO-extract workflows). General-purpose models first, then reasoning,
+// Ordered by usefulness for short-text rewriting (polish, auto-tag, and
+// action-item extraction workflows). General-purpose models first, then reasoning,
 // then compact/edge, then code-focused, then multimodal/specialty.
 
 export interface FreeModel {

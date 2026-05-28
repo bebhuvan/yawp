@@ -1,0 +1,339 @@
+# Yawp Architecture
+
+This document describes the production architecture of Yawp: process
+boundaries, data ownership, reliability expectations, extension points, and
+failure modes. It is intended for maintainers and contributors who need to
+change the system without introducing hidden coupling or brittle behavior.
+
+## Product Shape
+
+Yawp is a local-first Linux dictation app. The core promise is:
+
+- Record from the microphone.
+- Transcribe locally by default.
+- Either paste the transcript into the focused app or save it as a searchable
+  note.
+- Keep audio, transcripts, settings, and note metadata on the user's machine.
+- Treat cloud AI providers as optional enhancements, never as core
+  dependencies.
+
+The app is split into three independently restartable processes.
+
+```text
+Tauri desktop app
+  React + TypeScript UI
+  Talks to the sidecar over HTTP, SSE, and WebSocket.
+
+Python sidecar
+  FastAPI service on 127.0.0.1:17893.
+  Owns transcription, notes, settings, diagnostics, export, search, and
+  optional AI integrations.
+
+Python hotkey daemon
+  Owns global hotkeys, system-level capture/paste flows, and a small Unix
+  command socket for status and control.
+```
+
+## Process Responsibilities
+
+### Tauri Desktop App
+
+Location: `voice-app/`
+
+Responsibilities:
+
+- Render the note library, note detail view, recorder HUD, settings UI, and
+  toasts.
+- Use `voice-app/src/lib/api.ts` as the only sidecar API client.
+- Use local React state for UI state and sidecar events for cross-process note
+  updates.
+- Recover from render failures through `AppErrorBoundary`.
+- Avoid owning durable state. Durable state belongs to the sidecar.
+
+The frontend should not:
+
+- Write directly to SQLite or settings files.
+- Infer daemon state from UI state.
+- Treat OpenRouter, grammar, tagging, or todo extraction as mandatory for core
+  recording.
+- Apply destructive text changes without a recoverable UX.
+
+### Python Sidecar
+
+Location: `sidecar/app/`
+
+Responsibilities:
+
+- Serve REST, SSE, and WebSocket endpoints.
+- Own the SQLite database and migrations.
+- Own settings persistence.
+- Own ASR backend selection and model lifecycle.
+- Own transcript cleanup, grammar, tagging, todos, OpenRouter calls, export,
+  and diagnostics.
+- Provide stable API contracts to both the frontend and daemon.
+
+Important modules:
+
+- `main.py`: app construction, lifespan, CORS, request logging, router wiring.
+- `routes/`: HTTP and WebSocket route modules.
+- `db.py`: SQLite schema, migrations, CRUD, soft delete, FTS search.
+- `runtime.py`: ASR backend construction, model preload, ASR executor.
+- `transcription_service.py`: audio persistence, ASR, cleanup, enrichment.
+- `settings.py`: settings dataclass, atomic JSON save, mtime cache.
+- `events.py`: SSE event fanout.
+- `diagnostics.py`: runtime doctor report for support and UI diagnostics.
+
+The sidecar should not:
+
+- Block core save/paste flows on optional network enrichment.
+- Let optional subsystems crash route handlers without a clear user-facing
+  error.
+- Return raw provider errors directly to the UI.
+- Mutate notes without also emitting the relevant SSE event.
+
+### Hotkey Daemon
+
+Location: `sidecar/daemon.py`
+
+Responsibilities:
+
+- Register global hotkeys.
+- Record audio through `sounddevice`.
+- Stop toggle-mode recording through VAD silence detection.
+- Implement hold-to-talk mode with a solo-hold guard.
+- Paste text into the focused app using the best available platform tool.
+- Save notes or paste transcripts by calling the sidecar.
+- Expose a Unix command socket at `~/.voice/daemon.sock`.
+
+The daemon should be able to survive sidecar restarts and should report clear
+status when the sidecar is unavailable.
+
+## Data Ownership
+
+All durable app data lives under `~/.voice/` by default. `VOICE_DATA` can point
+tests or development environments elsewhere.
+
+```text
+~/.voice/
+  notes.db
+  audio/
+  settings.json
+  daemon.sock
+```
+
+### SQLite
+
+`sidecar/app/db.py` owns the schema. Schema changes must be appended as
+`PRAGMA user_version` migrations. Released migrations must not be edited in
+place.
+
+Notes use soft delete:
+
+- `deleted_at IS NULL`: visible note.
+- `deleted_at IS NOT NULL`: trash/undo window.
+- hard purge deletes the row and removes the audio file.
+
+Folders are first-class rows, not JSON-only metadata:
+
+- `folders.id`: stable ID used by notes.
+- `folders.name`: display name.
+- `folders.normalized_name`: case-folded unique name for duplicate prevention.
+- `notes.folder_id`: nullable assignment; deleting a folder unfiles its notes.
+- `notes.folder_manually_set`: manual assignment guard. When true, automatic
+  organization will not move the note.
+
+FTS5 indexes title, transcript, tags, and smart metadata. Search excludes
+soft-deleted notes.
+
+`smart_metadata` stores optional note organization data:
+
+- summary;
+- kind;
+- suggested collection;
+- people and projects;
+- keywords;
+- source and confidence.
+
+It is generated by OpenRouter when configured and falls back to local heuristics
+when offline or when the provider fails.
+
+When `auto_organize_enabled` is true and `smart_metadata.collection` reaches
+`auto_organize_min_confidence`, Yawp creates or reuses a matching folder and
+assigns the note to it. Manual folder moves set `folder_manually_set`, so later
+AI suggestions cannot silently override the user. The folder is the durable
+user-editable organization primitive; smart metadata remains advisory and
+searchable.
+
+### Settings
+
+`settings.json` is the single source of truth for app and daemon settings.
+The sidecar writes it atomically with a temp file and replace. Reads are cached
+by `mtime_ns` so the sidecar and daemon can observe external changes without
+heavy JSON reads.
+
+The public settings response must mask the OpenRouter API key. The frontend
+should never echo a masked key back as if it were the real value.
+
+## API Contracts
+
+The frontend and daemon should use public sidecar endpoints only.
+
+Core endpoints:
+
+- `GET /health`
+- `GET /diagnostics`
+- `GET /settings`
+- `PUT /settings`
+- `GET /notes`
+- `POST /notes`
+- `PATCH /notes/{id}`
+- `DELETE /notes/{id}`
+- `POST /notes/{id}/restore`
+- `GET /search`
+- `POST /transcribe`
+- `GET /capture/status`
+- `POST /capture/start`
+- `POST /capture/cancel`
+- `POST /capture/stop`
+- `POST /capture/stop-and-save`
+- `GET /events`
+- `WS /stream`
+
+Mutation rule:
+
+Any route that changes a note must broadcast one of:
+
+- `note.created`
+- `note.updated`
+- `note.deleted`
+- `note.restored`
+
+If a mutation references a missing note, the route should return `404` rather
+than silently returning an empty object.
+
+## Transcription Pipeline
+
+The normal path is:
+
+1. Persist incoming audio or write to a temporary file.
+2. Prepare readable audio for ASR by trimming long silence, rejecting
+   near-silent clips, and normalizing conservatively. If the input format cannot
+   be read by `soundfile`, the backend receives the original file.
+3. Call the configured ASR backend.
+4. Apply voice commands if enabled.
+5. Apply local cleanup if enabled.
+6. Generate a title.
+7. Optionally enrich with tags and todos.
+8. Save or return the transcript.
+
+ASR runs in a single-worker executor to avoid concurrent model access and CPU
+oversubscription. Optional enrichment should run outside the ASR executor so
+network latency does not block local transcription throughput.
+
+Production hardening targets:
+
+- Clear empty-recording errors.
+- Per-recording diagnostics for model, duration, ASR latency, and cleanup
+  state.
+- Clipping detection.
+
+The selected microphone is stored as `settings.input_device`. `None` means the
+system default input device. The sidecar and daemon both honor this setting when
+opening `sounddevice.InputStream`.
+
+Optional daemon audio cues are stored as `settings.audio_feedback_enabled`.
+They do not add a runtime dependency: the daemon uses `canberra-gtk-play` when
+available and otherwise falls back to a terminal bell.
+
+## OpenRouter Integration
+
+OpenRouter is optional. The local dictation flow must remain useful when:
+
+- no API key is configured;
+- the selected model is unavailable;
+- the provider is rate limited;
+- the network is down;
+- a response is malformed.
+
+OpenRouter features should follow this rule:
+
+- Polish: fall back to local cleanup when possible.
+- Tags: fall back to rule-based tags.
+- Todos: fail visibly but do not block note save.
+
+Provider responses should be cleaned, validated, and bounded before they update
+user data.
+
+## Hotkey Model
+
+Yawp supports two activation modes:
+
+- Toggle mode: press a shortcut to start, press again or wait for VAD silence
+  to stop.
+- Hold mode: hold one key to record, release to stop.
+
+Hold mode deliberately arms only after a short solo-hold delay. This avoids
+stealing normal shortcuts such as `Ctrl+R`.
+
+Production hardening targets:
+
+- A settings UI status display for daemon running/busy/recording.
+- A hotkey test flow.
+- Reset-to-default hotkeys.
+- Clear Wayland/X11 paste tool diagnostics.
+- CLI status/reload/cancel commands for support.
+
+## Diagnostics
+
+`GET /diagnostics` is the support and release-doctor surface. It should be safe
+to call even when optional tools or hardware are missing.
+
+It reports:
+
+- import availability;
+- configured data paths;
+- paste tools and selected paste tool;
+- daemon socket status;
+- database readiness and note count;
+- ASR model/backend loaded state and whether a sidecar restart is needed;
+- selected hotkey settings;
+- audio cue setting and loaded daemon value;
+- OpenRouter configured state;
+- microphone probe result;
+- sidecar port availability.
+
+Diagnostics should prefer partial reports over exceptions.
+
+## Testing Strategy
+
+Use `./scripts/check` as the release gate. It runs:
+
+- backend tests through `sidecar/.venv/bin/python -m pytest`;
+- frontend unit tests through `npm test`;
+- frontend production build through `npm run build`;
+- Tauri Rust compile check through `cargo check`.
+
+Plain system `pytest` is not a valid release signal because it can skip FastAPI
+route tests if the system interpreter lacks sidecar dependencies.
+
+Test expectations:
+
+- DB migrations and soft-delete behavior are covered.
+- API flow tests cover note CRUD, settings, capture status, atomic capture
+  save, polish persistence, grammar updates, and todo updates.
+- Frontend unit tests cover note state, search hook behavior, and native
+  capture state.
+- New user-visible behavior should include a focused regression test.
+
+## Code Quality Rules
+
+- Keep process boundaries explicit.
+- Prefer typed request/response schemas at API boundaries.
+- Prefer structured parsing over ad hoc string parsing.
+- Optional integrations must fail closed and preserve local core behavior.
+- Avoid hidden global state unless it is process-level runtime state and is
+  protected by locks or single-thread ownership.
+- Do not add new note mutation paths without event broadcasts.
+- Do not add settings that only exist in the UI or only exist in the daemon.
+- Do not introduce cloud calls in hot paths unless the user explicitly opted
+  into that feature.

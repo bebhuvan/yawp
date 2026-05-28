@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from . import config
@@ -26,17 +25,18 @@ _cache: tuple[int, "Settings"] | None = None
 
 @dataclass
 class Settings:
-    # Local faster-whisper model. Applied when the sidecar starts.
+    # Local ASR model. faster-whisper names are passed through; Parakeet uses
+    # "parakeet-tdt-0.6b-v3-int8". Applied when the sidecar starts.
     asr_model: str = config.DEFAULT_MODEL
+
+    # Optional sounddevice input device index. None means system default.
+    input_device: int | None = None
 
     # Tier 1 cleanup
     cleanup_enabled: bool = True
 
     # Voice commands ("period" → ., "new paragraph" → \n\n, etc.)
     voice_commands_enabled: bool = False
-
-    # Stream in-progress audio to the sidecar for live partial transcripts.
-    live_transcription_enabled: bool = True
 
     # Auto-tagging
     auto_tag_enabled: bool = True
@@ -51,13 +51,41 @@ class Settings:
     # Daemon hotkey mode: "toggle" or "hold"
     hotkey_mode: str = "toggle"
 
+    # Toggle-mode hotkeys use pynput combo syntax.
+    hotkey_notes: str = "<ctrl>+<alt>+n"
+    hotkey_paste: str = "<ctrl>+<alt>+v"
+
+    # Hold-mode hotkeys use a single pynput key. The daemon adds a short
+    # long-press guard so modifier shortcuts like Ctrl+R still pass through.
+    hold_key_notes: str = "<menu>"
+    hold_key_paste: str = "<ctrl_r>"
+
     # Auto-stop silence threshold (ms) for toggle mode. 0 disables auto-stop
     # entirely — recording continues until you tap the hotkey again. Range
     # is enforced at the API layer.
     auto_stop_ms: int = 1200
 
+    # Optional local audio cues for daemon recording lifecycle events.
+    # Disabled by default so install does not make sound unexpectedly.
+    audio_feedback_enabled: bool = False
+
+    # Paste mode: deliver text by setting the clipboard and pasting (instant for
+    # long dictations) instead of typing it character-by-character. Falls back
+    # to typing automatically if no clipboard tool (xclip / wl-copy) is present.
+    paste_use_clipboard: bool = True
+
     # Auto-extract action items on every new transcript (requires OpenRouter).
     extract_todos_enabled: bool = False
+
+    # Auto-file new notes into folders using smart metadata. Disabled by
+    # default because folder moves should feel user-controlled.
+    auto_organize_enabled: bool = False
+    auto_organize_min_confidence: float = 0.65
+
+    # Optional user guidance for how notes should be categorized into folders.
+    # Appended to the smart-metadata prompt when an OpenRouter key is set.
+    # Empty = use the built-in heuristic.
+    categorization_prompt: str = ""
 
     # Mirror notes to a folder of .md files. Empty = manual export only.
     export_path: str = ""

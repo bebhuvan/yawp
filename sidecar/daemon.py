@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import logging
 import os
 import shutil
@@ -25,6 +26,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -46,27 +48,56 @@ SAMPLE_RATE = 16_000
 CHANNELS = 1
 MIN_DURATION_S = 0.4
 
-# Toggle-mode hotkeys (pynput combo syntax)
-HOTKEY_NOTES = os.environ.get("VOICE_HOTKEY_NOTES", "<ctrl>+<alt>+n")
-HOTKEY_PASTE = os.environ.get("VOICE_HOTKEY_PASTE", "<ctrl>+<alt>+v")
+DEFAULT_HOTKEY_NOTES = "<ctrl>+<alt>+n"
+DEFAULT_HOTKEY_PASTE = "<ctrl>+<alt>+v"
+DEFAULT_HOLD_KEY_NOTES = "<menu>"
+DEFAULT_HOLD_KEY_PASTE = "<ctrl_r>"
 
-# Hold-mode hotkeys: single keys only (e.g. "<f9>", "<f10>", "a")
-HOLD_KEY_NOTES = os.environ.get("VOICE_HOLD_KEY_NOTES", "<f9>")
-HOLD_KEY_PASTE = os.environ.get("VOICE_HOLD_KEY_PASTE", "<f10>")
+# Toggle-mode hotkey env overrides (pynput combo syntax).
+HOTKEY_NOTES_ENV = os.environ.get("VOICE_HOTKEY_NOTES")
+HOTKEY_PASTE_ENV = os.environ.get("VOICE_HOTKEY_PASTE")
+
+# Hold-mode hotkeys: single keys only (e.g. "<ctrl_r>", "<menu>", "a").
+# Hold mode has a long-press guard below: shortcuts such as Ctrl+R cancel the
+# pending recording before it starts, while holding the key by itself records.
+HOLD_KEY_NOTES_ENV = os.environ.get("VOICE_HOLD_KEY_NOTES")
+HOLD_KEY_PASTE_ENV = os.environ.get("VOICE_HOLD_KEY_PASTE")
+HOLD_ARM_DELAY_MS = int(os.environ.get("VOICE_HOLD_ARM_DELAY_MS", "260"))
 
 _AUTO_STOP_MS_ENV = os.environ.get("VOICE_AUTO_STOP_MS")
 # Live, mutable copy. Defaults to env override if set, else the sidecar's
 # settings value at startup, else 1200ms. Refreshed by reload_settings().
 AUTO_STOP_MS = int(_AUTO_STOP_MS_ENV) if _AUTO_STOP_MS_ENV else 1200
+_AUDIO_FEEDBACK_ENV = os.environ.get("VOICE_AUDIO_FEEDBACK")
+AUDIO_FEEDBACK_ENABLED = (
+    (_AUDIO_FEEDBACK_ENV or "").strip().lower() in {"1", "true", "yes", "on"}
+)
 VAD_AGGRESSIVENESS = int(os.environ.get("VOICE_VAD_AGGRESSIVENESS", "2"))
 VAD_FRAME_MS = 20
 VAD_FRAME_SAMPLES = SAMPLE_RATE * VAD_FRAME_MS // 1000
 
 HAS_NOTIFY = shutil.which("notify-send") is not None
+HAS_CANBERRA = shutil.which("canberra-gtk-play") is not None
 HAS_XDOTOOL = shutil.which("xdotool") is not None
 HAS_WTYPE = shutil.which("wtype") is not None
 HAS_DOTOOL = shutil.which("dotool") is not None
+HAS_XCLIP = shutil.which("xclip") is not None
+HAS_WLCOPY = shutil.which("wl-copy") is not None
+HAS_WLPASTE = shutil.which("wl-paste") is not None
+
+# Window classes (lowercased, substring-matched) that paste with Ctrl+Shift+V
+# rather than Ctrl+V. Used so clipboard-paste works in terminals too.
+TERMINAL_WM_CLASSES = (
+    "terminal", "konsole", "xterm", "alacritty", "kitty", "wezterm",
+    "foot", "st-256color", "tilix", "rxvt", "urxvt", "hyper", "qterminal",
+    "termite", "terminator",
+)
 COMMAND_SOCKET = config.DATA_DIR / "daemon.sock"
+_CUE_EVENTS = {
+    "start": "audio-volume-change",
+    "stop": "complete",
+    "error": "dialog-error",
+}
 
 
 class VadAutoStop:
@@ -129,13 +160,36 @@ def notify(msg: str, title: str = "Yawp") -> None:
             pass
 
 
+def play_cue(kind: str) -> None:
+    if not AUDIO_FEEDBACK_ENABLED:
+        return
+    if HAS_CANBERRA:
+        event_id = _CUE_EVENTS.get(kind, "bell")
+        try:
+            subprocess.Popen(  # noqa: S603
+                ["canberra-gtk-play", "-i", event_id, "-d", "Yawp"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        except OSError:
+            pass
+    try:
+        print("\a", end="", flush=True)
+    except OSError:
+        pass
+
+
 def audio_callback(indata, frames, time_info, status):  # noqa: ARG001
     if status:
         print(f"[audio status] {status}", flush=True)
     if not state.recording:
         return
     state.frames.append(indata.copy())
-    if state.auto_stop is not None and state.auto_stop.feed(indata[:, 0]):
+    # Bind to a local: _finish_recording can null state.auto_stop on another
+    # thread between the None-check and feed(), which would raise here.
+    vad = state.auto_stop
+    if vad is not None and vad.feed(indata[:, 0]):
         threading.Thread(target=_auto_stop_trigger, daemon=True).start()
 
 
@@ -147,6 +201,10 @@ def _auto_stop_trigger() -> None:
 
 
 def start_stream(use_vad: bool) -> None:
+    s = fetch_settings()
+    input_device = s.get("input_device")
+    if not isinstance(input_device, int):
+        input_device = None
     state.frames = []
     state.auto_stop = (
         VadAutoStop(AUTO_STOP_MS, VAD_AGGRESSIVENESS)
@@ -157,6 +215,7 @@ def start_stream(use_vad: bool) -> None:
         samplerate=SAMPLE_RATE,
         channels=CHANNELS,
         dtype="float32",
+        device=input_device,
         callback=audio_callback,
         blocksize=0,
     )
@@ -219,6 +278,7 @@ def post_note(data: dict, mode: str) -> None:
         "audio_path": data.get("audio_path") or None,
         "tags": data.get("tags") or [],
         "todos": data.get("todos") or [],
+        "smart_metadata": data.get("smart_metadata") or {},
     }
     r = requests.post(f"{SIDECAR}/notes", json=payload, timeout=30)
     r.raise_for_status()
@@ -243,6 +303,96 @@ def type_text(text: str) -> bool:
     except subprocess.CalledProcessError as e:
         notify(f"{tool} failed: {e}")
         return False
+
+
+def _clipboard_available() -> bool:
+    return HAS_XCLIP or HAS_WLCOPY
+
+
+def _clipboard_get() -> Optional[bytes]:
+    """Read the current clipboard so we can restore it after pasting."""
+    try:
+        if HAS_WLPASTE and os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+            out = subprocess.run(["wl-paste", "-n"], capture_output=True, timeout=1.0)
+            return out.stdout if out.returncode == 0 else None
+        if HAS_XCLIP:
+            out = subprocess.run(
+                ["xclip", "-selection", "clipboard", "-o"],
+                capture_output=True, timeout=1.0,
+            )
+            return out.stdout if out.returncode == 0 else None
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return None
+
+
+def _clipboard_set(data: bytes) -> bool:
+    try:
+        if HAS_WLCOPY and os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+            subprocess.run(["wl-copy"], input=data, timeout=1.0, check=True)
+            return True
+        if HAS_XCLIP:
+            subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=data, timeout=1.0, check=True,
+            )
+            return True
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return False
+
+
+def _active_window_is_terminal() -> bool:
+    """X11 only: best-effort check of the focused window's class so we can use
+    Ctrl+Shift+V in terminals. Returns False (→ Ctrl+V) when unknown."""
+    if not HAS_XDOTOOL:
+        return False
+    try:
+        out = subprocess.run(
+            ["xdotool", "getactivewindow", "getwindowclassname"],
+            capture_output=True, text=True, timeout=1.0,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return False
+    cls = (out.stdout or "").strip().lower()
+    return bool(cls) and any(t in cls for t in TERMINAL_WM_CLASSES)
+
+
+def paste_via_clipboard(text: str) -> bool:
+    """Set the clipboard to `text` and send the paste shortcut. Near-instant
+    regardless of length, unlike char-by-char typing. Restores the previous
+    clipboard afterward. Returns False (→ caller types instead) if unavailable."""
+    if not _clipboard_available():
+        return False
+    wayland = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+    saved = _clipboard_get()
+    if not _clipboard_set(text.encode("utf-8")):
+        return False
+    time.sleep(0.06)  # let the new selection settle before pasting
+
+    terminal = (not wayland) and _active_window_is_terminal()
+    try:
+        if wayland and HAS_WTYPE:
+            cmd = (
+                ["wtype", "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"]
+                if terminal
+                else ["wtype", "-M", "ctrl", "v", "-m", "ctrl"]
+            )
+        elif HAS_XDOTOOL:
+            cmd = ["xdotool", "key", "--clearmodifiers",
+                   "ctrl+shift+v" if terminal else "ctrl+v"]
+        else:
+            return False
+        subprocess.run(cmd, check=True, timeout=3)
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+    if saved is not None:
+        def _restore() -> None:
+            time.sleep(0.4)
+            _clipboard_set(saved)
+        threading.Thread(target=_restore, daemon=True).start()
+    return True
 
 
 def paste_tool() -> Optional[str]:
@@ -279,9 +429,11 @@ def _start_recording(mode: str, use_vad: bool) -> None:
         state.mode = mode
         start_stream(use_vad=use_vad)
         state.recording = True
+        play_cue("start")
     except Exception as e:
         state.recording = False
         state.mode = None
+        play_cue("error")
         notify(f"Could not start mic: {e}")
 
 
@@ -295,6 +447,7 @@ def _finish_recording() -> None:
     state.mode = None
     audio = close_stream()
     state.auto_stop = None
+    play_cue("stop")
     threading.Thread(target=_process, args=(audio, mode), daemon=True).start()
 
 
@@ -302,6 +455,7 @@ def _process(audio: np.ndarray, mode: str) -> None:
     try:
         duration = len(audio) / SAMPLE_RATE if len(audio) else 0
         if duration < MIN_DURATION_S:
+            play_cue("error")
             notify("Too short — discarded.")
             return
         notify("Transcribing…")
@@ -312,14 +466,28 @@ def _process(audio: np.ndarray, mode: str) -> None:
         try:
             data = post_transcribe(wav, enrich=enrich)
         except requests.RequestException as e:
+            play_cue("error")
             notify(f"Transcription failed: {e}")
             return
+        enrichment_status = data.get("enrichment_status") or {}
+        log.info(
+            "transcribed request_id=%s mode=%s duration=%.2fs chars=%d enrichment_ok=%s",
+            data.get("request_id") or "-",
+            mode,
+            float(data.get("duration") or duration),
+            len(data.get("text") or ""),
+            enrichment_status.get("ok"),
+        )
         text = (data.get("text") or "").strip()
         if not text:
+            play_cue("error")
             notify("Couldn't hear anything.")
             return
         if mode == "paste":
-            ok = type_text(text)
+            # Clipboard-paste is near-instant for long dictations; fall back to
+            # typing char-by-char if it's disabled or no clipboard tool exists.
+            use_clipboard = fetch_settings().get("paste_use_clipboard", True)
+            ok = (use_clipboard and paste_via_clipboard(text)) or type_text(text)
             try:
                 post_note(data, mode="paste")
             except requests.RequestException:
@@ -332,6 +500,7 @@ def _process(audio: np.ndarray, mode: str) -> None:
             try:
                 post_note(data, mode="notes")
             except requests.RequestException as e:
+                play_cue("error")
                 notify(f"Saved transcript locally, but DB save failed: {e}")
                 return
             preview = data.get("title") or text[:48]
@@ -374,6 +543,7 @@ def cancel_recording() -> None:
             state.mode = None
             state.auto_stop = None
             close_stream()
+            play_cue("error")
             notify("Recording cancelled.")
 
 
@@ -395,12 +565,22 @@ def _parse_key(spec: str):
 
 
 class HoldController:
-    """on_press starts recording; on_release of the same key stops it."""
+    """Long-press a single key to record; chords stay normal shortcuts.
+
+    A raw modifier key is risky because users also hold it for shortcuts
+    like Ctrl+R and Ctrl+Shift+R. So we arm recording only after a short solo
+    hold. If any other key is pressed before or during recording, this path
+    cancels instead of transcribing/pasting.
+    """
 
     def __init__(self, key_to_mode: dict) -> None:
         # Map pynput key → "notes" | "paste"
         self.key_to_mode = key_to_mode
+        self.pending_key = None
+        self.pending_mode: Optional[str] = None
+        self.pending_timer: Optional[threading.Timer] = None
         self.active_key = None
+        self.lock = threading.Lock()
 
     def _matches(self, k1, k2) -> bool:
         return k1 == k2 or (
@@ -408,26 +588,73 @@ class HoldController:
         )
 
     def on_press(self, key) -> None:
-        if self.active_key is not None:
-            return
-        for hold_key, mode in self.key_to_mode.items():
-            if self._matches(key, hold_key):
-                self.active_key = hold_key
-                with state.lock:
-                    _start_recording(mode, use_vad=False)
-                if state.recording:
-                    notify(f"Recording → {mode.title()} (release to stop)")
+        with self.lock:
+            if self.active_key is not None:
+                if not self._matches(key, self.active_key):
+                    self._cancel_active_locked()
                 return
+            if self.pending_key is not None:
+                if not self._matches(key, self.pending_key):
+                    self._cancel_pending_locked()
+                return
+            for hold_key, mode in self.key_to_mode.items():
+                if self._matches(key, hold_key):
+                    self.pending_key = hold_key
+                    self.pending_mode = mode
+                    self.pending_timer = threading.Timer(
+                        HOLD_ARM_DELAY_MS / 1000,
+                        self._arm_if_still_pending,
+                    )
+                    self.pending_timer.daemon = True
+                    self.pending_timer.start()
+                    return
+
+    def _arm_if_still_pending(self) -> None:
+        with self.lock:
+            if self.pending_key is None or self.pending_mode is None:
+                return
+            hold_key = self.pending_key
+            mode = self.pending_mode
+            self.pending_key = None
+            self.pending_mode = None
+            self.pending_timer = None
+            self.active_key = hold_key
+        with state.lock:
+            _start_recording(mode, use_vad=False)
+        if state.recording:
+            notify(f"Recording → {mode.title()} (release to stop)")
+
+    def _cancel_pending_locked(self) -> None:
+        if self.pending_timer is not None:
+            self.pending_timer.cancel()
+        self.pending_key = None
+        self.pending_mode = None
+        self.pending_timer = None
+
+    def _cancel_active_locked(self) -> None:
+        self.active_key = None
+        with state.lock:
+            if state.recording:
+                state.recording = False
+                state.mode = None
+                state.auto_stop = None
+                close_stream()
 
     def on_release(self, key) -> None:
-        if self.active_key is None:
-            return
-        if self._matches(key, self.active_key):
-            self.active_key = None
+        finish = False
+        with self.lock:
+            if self.pending_key is not None and self._matches(key, self.pending_key):
+                self._cancel_pending_locked()
+                return
+            if self.active_key is None:
+                return
+            if self._matches(key, self.active_key):
+                self.active_key = None
+                finish = True
+        if finish:
             with state.lock:
                 if state.recording:
                     _finish_recording()
-
 
 # --- Settings ------------------------------------------------------------
 
@@ -447,33 +674,53 @@ def fetch_settings() -> dict:
 # restarting the daemon.
 _active_listener: Optional[object] = None
 _active_mode: Optional[str] = None
+_active_bindings: Optional[tuple[str, str, str, str]] = None
 
 
-def _build_listener(hotkey_mode: str):
+def _bindings_from_settings(s: dict) -> tuple[str, str, str, str]:
+    hotkey_notes = HOTKEY_NOTES_ENV or s.get("hotkey_notes") or DEFAULT_HOTKEY_NOTES
+    hotkey_paste = HOTKEY_PASTE_ENV or s.get("hotkey_paste") or DEFAULT_HOTKEY_PASTE
+    hold_key_notes = HOLD_KEY_NOTES_ENV or s.get("hold_key_notes") or DEFAULT_HOLD_KEY_NOTES
+    hold_key_paste = HOLD_KEY_PASTE_ENV or s.get("hold_key_paste") or DEFAULT_HOLD_KEY_PASTE
+    return hotkey_notes, hotkey_paste, hold_key_notes, hold_key_paste
+
+
+def _build_listener(
+    hotkey_mode: str,
+    bindings: tuple[str, str, str, str],
+):
+    hotkey_notes, hotkey_paste, hold_key_notes, hold_key_paste = bindings
     if hotkey_mode == "hold":
-        kn = _parse_key(HOLD_KEY_NOTES)
-        kp = _parse_key(HOLD_KEY_PASTE)
+        kn = _parse_key(hold_key_notes)
+        kp = _parse_key(hold_key_paste)
         if kn is None or kp is None:
             log.error(
                 "could not parse hold keys (notes=%r, paste=%r)",
-                HOLD_KEY_NOTES,
-                HOLD_KEY_PASTE,
+                hold_key_notes,
+                hold_key_paste,
             )
             return None
         ctl = HoldController({kn: "notes", kp: "paste"})
         return keyboard.Listener(on_press=ctl.on_press, on_release=ctl.on_release)
     return keyboard.GlobalHotKeys(
-        {HOTKEY_NOTES: toggle_notes, HOTKEY_PASTE: toggle_paste}
+        {hotkey_notes: toggle_notes, hotkey_paste: toggle_paste}
     )
 
 
-def _swap_listener(hotkey_mode: str) -> str:
+def _swap_listener(
+    hotkey_mode: str,
+    bindings: tuple[str, str, str, str],
+) -> str:
     """Replace the active hotkey listener with one for the given mode.
     Returns the mode actually applied (in case parsing failed)."""
-    global _active_listener, _active_mode
-    if hotkey_mode == _active_mode and _active_listener is not None:
+    global _active_listener, _active_mode, _active_bindings
+    if (
+        hotkey_mode == _active_mode
+        and bindings == _active_bindings
+        and _active_listener is not None
+    ):
         return _active_mode
-    new_listener = _build_listener(hotkey_mode)
+    new_listener = _build_listener(hotkey_mode, bindings)
     if new_listener is None:
         return _active_mode or "toggle"
     if _active_listener is not None:
@@ -484,6 +731,7 @@ def _swap_listener(hotkey_mode: str) -> str:
     new_listener.start()
     _active_listener = new_listener
     _active_mode = hotkey_mode
+    _active_bindings = bindings
     return hotkey_mode
 
 
@@ -491,10 +739,11 @@ def reload_settings() -> str:
     """Re-read settings from the sidecar and swap the listener if the
     activation mode changed. Also refreshes AUTO_STOP_MS so silence-stop
     changes take effect on the next recording."""
-    global AUTO_STOP_MS
+    global AUTO_STOP_MS, AUDIO_FEEDBACK_ENABLED
     s = fetch_settings()
     mode_env = os.environ.get("VOICE_HOTKEY_MODE")
     desired = mode_env or s.get("hotkey_mode") or "toggle"
+    bindings = _bindings_from_settings(s)
 
     # Env var wins. Otherwise honour what the sidecar says, falling back to
     # the previous in-memory value if the key is missing.
@@ -503,10 +752,16 @@ def reload_settings() -> str:
             AUTO_STOP_MS = max(0, min(10_000, int(s["auto_stop_ms"])))
         except (TypeError, ValueError):
             pass
+    if _AUDIO_FEEDBACK_ENV is None and "audio_feedback_enabled" in s:
+        AUDIO_FEEDBACK_ENABLED = bool(s["audio_feedback_enabled"])
 
-    applied = _swap_listener(desired)
+    applied = _swap_listener(desired, bindings)
     log.info(
-        "settings reloaded (mode=%s, auto_stop_ms=%d)", applied, AUTO_STOP_MS
+        "settings reloaded (mode=%s, auto_stop_ms=%d, audio_feedback=%s, bindings=%s)",
+        applied,
+        AUTO_STOP_MS,
+        AUDIO_FEEDBACK_ENABLED,
+        bindings,
     )
     notify(f"Hotkeys reloaded — {applied} mode.")
     return applied
@@ -519,6 +774,39 @@ def command_status() -> str:
         if state.busy:
             return "busy"
     return "idle"
+
+
+def command_status_json() -> str:
+    hotkey_notes = hotkey_paste = hold_key_notes = hold_key_paste = None
+    if _active_bindings is not None:
+        hotkey_notes, hotkey_paste, hold_key_notes, hold_key_paste = _active_bindings
+    with state.lock:
+        if state.recording:
+            state_value = "recording"
+            recording_mode = state.mode
+        elif state.busy:
+            state_value = "busy"
+            recording_mode = None
+        else:
+            state_value = "idle"
+            recording_mode = None
+    return json.dumps(
+        {
+            "state": state_value,
+            "recording_mode": recording_mode,
+            "hotkey_mode": _active_mode,
+            "auto_stop_ms": AUTO_STOP_MS,
+            "audio_feedback_enabled": AUDIO_FEEDBACK_ENABLED,
+            "bindings": {
+                "hotkey_notes": hotkey_notes,
+                "hotkey_paste": hotkey_paste,
+                "hold_key_notes": hold_key_notes,
+                "hold_key_paste": hold_key_paste,
+            },
+            "paste_tool": paste_tool(),
+        },
+        sort_keys=True,
+    )
 
 
 def handle_command(command: str) -> str:
@@ -534,6 +822,8 @@ def handle_command(command: str) -> str:
         return command_status()
     if command == "status":
         return command_status()
+    if command == "status-json":
+        return command_status_json()
     if command == "reload-settings":
         applied = reload_settings()
         return f"reloaded:{applied}"
@@ -607,6 +897,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Print running daemon status.",
     )
+    parser.add_argument(
+        "--status-json",
+        action="store_true",
+        help="Print detailed running daemon status as JSON.",
+    )
+    parser.add_argument(
+        "--reload-settings",
+        action="store_true",
+        help="Ask a running daemon to reload hotkey settings.",
+    )
     return parser.parse_args(argv)
 
 
@@ -617,6 +917,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         ("toggle-paste", args.toggle_paste),
         ("cancel", args.cancel),
         ("status", args.status),
+        ("status-json", args.status_json),
+        ("reload-settings", args.reload_settings),
     ]
     requested = [name for name, enabled in commands if enabled]
     if len(requested) > 1:
@@ -628,15 +930,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     settings = fetch_settings()
     mode_env = os.environ.get("VOICE_HOTKEY_MODE")
     hotkey_mode = mode_env or settings.get("hotkey_mode") or "toggle"
+    bindings = _bindings_from_settings(settings)
+    hotkey_notes, hotkey_paste, hold_key_notes, hold_key_paste = bindings
 
     # Honour the user's silence threshold from the sidecar settings unless
     # the env var overrides it.
-    global AUTO_STOP_MS
+    global AUTO_STOP_MS, AUDIO_FEEDBACK_ENABLED
     if _AUTO_STOP_MS_ENV is None and "auto_stop_ms" in settings:
         try:
             AUTO_STOP_MS = max(0, min(10_000, int(settings["auto_stop_ms"])))
         except (TypeError, ValueError):
             pass
+    if _AUDIO_FEEDBACK_ENV is None and "audio_feedback_enabled" in settings:
+        AUDIO_FEEDBACK_ENABLED = bool(settings["audio_feedback_enabled"])
 
     command_server = start_command_server()
 
@@ -645,16 +951,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"  · Commands:   {COMMAND_SOCKET}")
     print(f"  · Mode:       {hotkey_mode}")
     if hotkey_mode == "toggle":
-        print(f"  · Notes:      {HOTKEY_NOTES}")
-        print(f"  · Paste:      {HOTKEY_PASTE}")
+        print(f"  · Notes:      {hotkey_notes}")
+        print(f"  · Paste:      {hotkey_paste}")
         if AUTO_STOP_MS > 0:
             print(
                 f"  · Auto-stop:  after {AUTO_STOP_MS/1000:.1f}s of silence "
                 f"(VAD level {VAD_AGGRESSIVENESS})"
             )
     else:
-        print(f"  · Notes:      hold {HOLD_KEY_NOTES}")
-        print(f"  · Paste:      hold {HOLD_KEY_PASTE}")
+        print(f"  · Notes:      hold {hold_key_notes}")
+        print(f"  · Paste:      hold {hold_key_paste}")
+    print(f"  · Audio cue:  {'on' if AUDIO_FEEDBACK_ENABLED else 'off'}")
 
     try:
         h = requests.get(f"{SIDECAR}/health", timeout=3).json()
@@ -676,11 +983,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             file=sys.stderr,
         )
 
-    applied = _swap_listener(hotkey_mode)
+    applied = _swap_listener(hotkey_mode, bindings)
     if _active_listener is None:
         print(
             f"ERROR: could not parse hold keys "
-            f"(notes={HOLD_KEY_NOTES!r}, paste={HOLD_KEY_PASTE!r})",
+            f"(notes={hold_key_notes!r}, paste={hold_key_paste!r})",
             file=sys.stderr,
         )
         return 2

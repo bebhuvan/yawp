@@ -1,16 +1,14 @@
 ---
 name: Bug report
-about: Something doesn't work as expected
+about: Report a reproducible Yawp problem
+title: ""
 labels: bug
+assignees: ""
 ---
 
-## What happened
+## What happened?
 
-<!-- One or two sentences. -->
-
-## What you expected
-
-<!-- One sentence. -->
+## What did you expect?
 
 ## Steps to reproduce
 
@@ -20,17 +18,25 @@ labels: bug
 
 ## Environment
 
-- Distro + kernel: `uname -a` →
-- Session type: `echo $XDG_SESSION_TYPE` →
-- Yawp commit: `git -C ~/path/to/yawp log -1 --oneline` →
-- Python: `python3 --version` →
-- Node: `node --version` →
+- Linux distribution:
+- Desktop/session: X11 or Wayland
+- Install method: `.deb`, AppImage, or source
+- Yawp version or commit:
+
+## Diagnostics
+
+Run:
+
+```bash
+./scripts/doctor
+```
+
+Paste the output here. The report does not include your OpenRouter API key.
 
 ## Logs
 
-<!-- Last 20–30 lines from whichever is relevant. -->
+```bash
+journalctl --user -u yawp-sidecar --since "20 minutes ago"
+journalctl --user -u yawp-daemon --since "20 minutes ago"
+```
 
-```
-journalctl --user -u yawp-sidecar -n 40
-journalctl --user -u yawp-daemon  -n 40
-```

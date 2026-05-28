@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Yawp — local-first voice dictation for Linux</title>
+<meta name="description" content="Press a hotkey, talk, and the transcript appears wherever your cursor is. Every byte of audio stays on your machine. Open-source, local-first voice dictation for Linux." />
+<meta property="og:title" content="Yawp — local-first voice dictation for Linux" />
+<meta property="og:description" content="Press a hotkey, talk, and the transcript appears wherever your cursor is. Every byte stays on your machine." />
+<meta property="og:type" content="website" />
+<meta property="og:image" content="icon.png" />
+<link rel="icon" type="image/png" href="favicon.png" />
+<link rel="apple-touch-icon" href="icon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Source+Serif+4:ital,opsz,wght@0,8..60,300..600;1,8..60,400..600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --paper: #fbfbfa;
+    --paper-deep: #f4f3ef;
+    --paper-edge: #ebeae5;
+    --ink: #191919;
+    --ink-soft: #3a3a37;
+    --ink-quiet: #7d7b75;
+    --ink-faint: #b3b1aa;
+    --rule: #d8d6cf;
+    --rule-soft: #ecebe5;
+    --accent: #c8302e;
+    --accent-ink: #9c1e1c;
+    --accent-soft: #f8e3e2;
+    --display: "Fraunces", Georgia, "Times New Roman", serif;
+    --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+    --maxw: 1080px;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 18px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "kern", "liga", "calt", "onum";
+    /* faint paper grain */
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(40, 28, 18, 0.022) 1px, transparent 0);
+    background-size: 4px 4px;
+  }
+
+  ::selection { background: var(--accent-soft); color: var(--accent-ink); }
+
+  a { color: inherit; }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+
+  /* ---- type helpers ---- */
+  .display {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 144, "SOFT" 40, "wght" 380;
+    letter-spacing: -0.025em;
+    line-height: 1.02;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--ink-quiet);
+    font-weight: 500;
+  }
+  .mono { font-family: var(--mono); }
+  .numeral {
+    font-family: var(--display);
+    font-variation-settings: "opsz" 144, "SOFT" 50, "wght" 400;
+    font-style: italic;
+    color: var(--ink-faint);
+    letter-spacing: 0.02em;
+  }
+
+  /* ---- top bar ---- */
+  header.bar {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: saturate(1.1) blur(8px);
+    background: rgba(251, 251, 250, 0.82);
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .bar .wrap { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .brand { display: flex; align-items: center; gap: 9px; text-decoration: none; }
+  .brand-icon { width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--rule-soft); display: block; }
+  .brand .mark { font-family: var(--display); font-variation-settings: "opsz" 144, "SOFT" 30, "wght" 500; font-size: 24px; letter-spacing: -0.03em; }
+  .brand .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); display: inline-block; transform: translateY(-2px); animation: pulse 1.6s var(--ease) infinite; }
+  nav.links { display: flex; align-items: center; gap: 26px; }
+  nav.links a { text-decoration: none; color: var(--ink-quiet); font-size: 15px; transition: color 160ms var(--ease); }
+  nav.links a:hover { color: var(--ink); }
+  .ghost-btn {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em;
+    border: 1px solid var(--rule); border-radius: 999px; padding: 8px 16px;
+    text-decoration: none; color: var(--ink); transition: all 180ms var(--ease);
+  }
+  .ghost-btn:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  @media (max-width: 720px) { nav.links a.hide-sm { display: none; } }
+
+  /* ---- hero ---- */
+  .hero { padding: 92px 0 64px; position: relative; overflow: hidden; }
+  .hero .wrap { position: relative; z-index: 2; }
+  .epigraph {
+    position: relative;
+    font-family: var(--display);
+    font-variation-settings: "opsz" 144, "SOFT" 60, "wght" 330;
+    font-style: italic;
+    font-size: clamp(27px, 4.6vw, 46px);
+    line-height: 1.16;
+    letter-spacing: -0.016em;
+    color: var(--ink);
+    max-width: 16ch;
+    margin: 0 0 44px;
+    padding-left: 2px;
+  }
+  .epigraph::before {
+    content: "\201C";
+    position: absolute;
+    left: -0.32em; top: -0.36em;
+    font-family: var(--display);
+    font-variation-settings: "opsz" 144, "wght" 400;
+    font-size: clamp(120px, 19vw, 210px);
+    line-height: 1;
+    color: var(--accent-soft);
+    font-style: normal;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .epigraph .qtext { position: relative; z-index: 1; }
+  .epigraph em { font-style: italic; color: var(--accent-ink); font-variation-settings: "opsz" 144, "SOFT" 80, "wght" 360; }
+  .epigraph cite {
+    display: block; position: relative; z-index: 1;
+    font-style: normal; font-family: var(--mono); font-size: 12px;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-quiet);
+    margin-top: 22px;
+  }
+  .epigraph cite::before { content: "— "; color: var(--ink-faint); }
+  h1.hero-title { margin: 0; font-size: clamp(52px, 9.5vw, 120px); }
+  h1.hero-title .em { font-style: italic; font-variation-settings: "opsz" 144, "SOFT" 60, "wght" 360; color: var(--accent-ink); }
+  .lede { font-size: clamp(19px, 2.4vw, 24px); color: var(--ink-soft); max-width: 36ch; margin: 26px 0 0; line-height: 1.5; }
+  .hero-cta { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 38px; }
+  .btn-primary {
+    font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em;
+    background: var(--ink); color: var(--paper); text-decoration: none;
+    padding: 14px 26px; border-radius: 999px; border: 1px solid var(--ink);
+    transition: transform 180ms var(--ease), background 180ms var(--ease);
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .btn-primary:hover { transform: translateY(-2px); background: var(--accent-ink); border-color: var(--accent-ink); }
+  .btn-text { font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em; color: var(--ink-soft); text-decoration: none; border-bottom: 1px solid var(--rule); padding-bottom: 3px; transition: color 160ms, border-color 160ms; }
+  .btn-text:hover { color: var(--ink); border-color: var(--ink); }
+  .meta-row { margin-top: 34px; display: flex; flex-wrap: wrap; gap: 8px 18px; }
+  .meta-row span { display: inline-flex; align-items: center; gap: 8px; }
+  .meta-row .sep { color: var(--ink-faint); }
+
+  /* dictation demo */
+  .demo {
+    margin-top: 56px;
+    border: 1px solid var(--rule); border-radius: 12px; background: var(--paper);
+    box-shadow: 0 30px 60px -38px rgba(40, 28, 18, 0.35), 0 6px 18px -12px rgba(40, 28, 18, 0.12);
+    overflow: hidden;
+  }
+  .demo-top { display: flex; align-items: center; gap: 12px; padding: 13px 18px; border-bottom: 1px solid var(--rule-soft); background: var(--paper-deep); }
+  .demo-top .rec { display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--accent); }
+  .demo-top .rec b { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s var(--ease) infinite; }
+  .waves { display: inline-flex; align-items: flex-end; gap: 3px; height: 16px; margin-left: 4px; }
+  .waves i { width: 3px; background: var(--ink-faint); border-radius: 2px; animation: wave 900ms ease-in-out infinite; }
+  .waves i:nth-child(1){ height: 6px; animation-delay: 0ms; }
+  .waves i:nth-child(2){ height: 13px; animation-delay: 120ms; }
+  .waves i:nth-child(3){ height: 9px; animation-delay: 240ms; }
+  .waves i:nth-child(4){ height: 15px; animation-delay: 360ms; }
+  .waves i:nth-child(5){ height: 7px; animation-delay: 480ms; }
+  .demo-top .hint { margin-left: auto; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; color: var(--ink-quiet); }
+  .demo-top kbd {
+    font-family: var(--mono); font-size: 10.5px; background: var(--paper); border: 1px solid var(--rule);
+    border-bottom-width: 2px; border-radius: 5px; padding: 2px 6px; color: var(--ink-soft);
+  }
+  .demo-body { padding: 30px 26px 36px; min-height: 132px; display: flex; flex-direction: column; justify-content: center; }
+  .spoken { font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.04em; color: var(--ink-quiet); margin-bottom: 16px; }
+  .spoken .q { color: var(--accent-ink); }
+  .typed { font-family: var(--serif); font-size: clamp(20px, 3vw, 30px); line-height: 1.4; color: var(--ink); min-height: 1.4em; }
+  .caret { display: inline-block; width: 2px; height: 1.05em; background: var(--accent); transform: translateY(3px); margin-left: 1px; animation: blink 1.05s steps(1) infinite; }
+
+  /* ---- section scaffolding ---- */
+  section.band { padding: 86px 0; border-top: 1px solid var(--rule-soft); }
+  .sec-head { display: flex; align-items: baseline; gap: 18px; margin-bottom: 8px; }
+  .sec-head .numeral { font-size: 20px; }
+  .sec-head h2 { font-family: var(--display); font-variation-settings: "opsz" 144, "SOFT" 40, "wght" 420; font-size: clamp(30px, 4.5vw, 46px); letter-spacing: -0.022em; margin: 0; line-height: 1.05; }
+  .sec-sub { color: var(--ink-soft); font-style: italic; font-size: 18px; max-width: 56ch; margin: 6px 0 0; }
+
+  /* pillars */
+  .pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-top: 44px; }
+  .pillar { padding: 4px 30px; border-left: 1px solid var(--rule); }
+  .pillar:first-child { border-left: none; padding-left: 0; }
+  .pillar h3 { font-family: var(--display); font-variation-settings: "opsz" 40, "SOFT" 30, "wght" 480; font-size: 21px; letter-spacing: -0.01em; margin: 0 0 8px; }
+  .pillar p { margin: 0; color: var(--ink-soft); font-size: 16px; line-height: 1.6; }
+  @media (max-width: 760px) { .pillars { grid-template-columns: 1fr; } .pillar { border-left: none; border-top: 1px solid var(--rule-soft); padding: 22px 0; } .pillar:first-child { border-top: none; padding-top: 4px; } }
+
+  /* features */
+  .features { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; margin-top: 48px; background: var(--rule-soft); border: 1px solid var(--rule-soft); border-radius: 10px; overflow: hidden; }
+  .feat { background: var(--paper); padding: 28px 30px; transition: background 220ms var(--ease); }
+  .feat:hover { background: var(--paper-deep); }
+  .feat .k { display: flex; align-items: baseline; gap: 12px; }
+  .feat .k .n { font-family: var(--mono); font-size: 12px; color: var(--accent); width: 28px; }
+  .feat h3 { font-family: var(--display); font-variation-settings: "opsz" 40, "SOFT" 30, "wght" 470; font-size: 20px; letter-spacing: -0.012em; margin: 0; }
+  .feat p { margin: 10px 0 0 40px; color: var(--ink-soft); font-size: 15.5px; line-height: 1.58; }
+  .feat p .kbd { font-family: var(--mono); font-size: 12px; background: var(--paper-deep); border: 1px solid var(--rule-soft); border-radius: 4px; padding: 1px 6px; color: var(--ink-soft); }
+  @media (max-width: 760px) { .features { grid-template-columns: 1fr; } .feat p { margin-left: 0; } }
+
+  /* AI section */
+  .ai-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 46px; }
+  .ai-card { background: var(--paper); border: 1px solid var(--rule); border-radius: 12px; padding: 28px 26px 30px; position: relative; transition: transform 200ms var(--ease), box-shadow 200ms var(--ease); }
+  .ai-card:hover { transform: translateY(-3px); box-shadow: 0 18px 40px -28px rgba(40,28,18,0.3); }
+  .ai-card .badge { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--accent); display: block; margin-bottom: 14px; }
+  .ai-card h3 { font-family: var(--display); font-variation-settings: "opsz" 40, "SOFT" 30, "wght" 470; font-size: 21px; letter-spacing: -0.014em; margin: 0 0 10px; }
+  .ai-card p { margin: 0; color: var(--ink-soft); font-size: 15.5px; line-height: 1.62; }
+  .ai-card .mono { font-size: 13.5px; background: var(--paper-deep); border: 1px solid var(--rule-soft); border-radius: 4px; padding: 1px 5px; }
+  @media (max-width: 760px) { .ai-grid { grid-template-columns: 1fr; } }
+
+  /* screenshot gallery */
+  .shots { display: grid; grid-template-columns: repeat(2, 1fr); gap: 30px; margin-top: 46px; }
+  .shot { margin: 0; }
+  .shot img {
+    width: 100%; height: auto; display: block;
+    border: 1px solid var(--rule); border-radius: 11px; background: var(--paper);
+    box-shadow: 0 24px 54px -32px rgba(40, 28, 18, 0.4), 0 6px 16px -10px rgba(40, 28, 18, 0.12);
+    transition: transform 240ms var(--ease), box-shadow 240ms var(--ease);
+  }
+  .shot:hover img { transform: translateY(-4px); box-shadow: 0 34px 70px -34px rgba(40, 28, 18, 0.48); }
+  .shot figcaption {
+    margin-top: 14px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink-quiet);
+  }
+  @media (max-width: 760px) { .shots { grid-template-columns: 1fr; gap: 24px; } }
+
+  /* install */
+  .code {
+    margin-top: 30px; background: #1c1b19; color: #e9e6df; border-radius: 12px;
+    font-family: var(--mono); font-size: 14px; line-height: 1.85; overflow: hidden;
+    box-shadow: 0 24px 50px -34px rgba(20, 18, 14, 0.5);
+  }
+  .code .top { display: flex; gap: 7px; padding: 13px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .code .top i { width: 11px; height: 11px; border-radius: 50%; background: #44413c; }
+  .code .top i:first-child { background: var(--accent); }
+  .code pre { margin: 0; padding: 20px 22px; overflow-x: auto; }
+  .code .c { color: #8a8madd; color: #8f8a80; }
+  .code .p { color: var(--accent); }
+  .code .s { color: #cdbf8f; }
+  .install-note { margin-top: 22px; color: var(--ink-soft); font-size: 15.5px; max-width: 62ch; }
+  .install-note code { font-family: var(--mono); font-size: 13px; background: var(--paper-deep); border: 1px solid var(--rule-soft); border-radius: 4px; padding: 1px 6px; }
+
+  /* roadmap */
+  .road { margin-top: 44px; display: grid; gap: 0; }
+  .road-item { display: grid; grid-template-columns: 120px 1fr; gap: 28px; padding: 26px 0; border-top: 1px solid var(--rule-soft); }
+  .road-item:first-child { border-top: none; }
+  .road-item .tag { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-quiet); padding-top: 5px; }
+  .road-item .tag.next { color: var(--accent); }
+  .road-item h3 { font-family: var(--display); font-variation-settings: "opsz" 40, "SOFT" 30, "wght" 460; font-size: 22px; letter-spacing: -0.014em; margin: 0 0 6px; }
+  .road-item p { margin: 0; color: var(--ink-soft); font-size: 16px; line-height: 1.6; }
+  @media (max-width: 640px) { .road-item { grid-template-columns: 1fr; gap: 6px; } }
+
+  /* claude credit */
+  .credit { text-align: center; }
+  .credit .mark-big { font-family: var(--display); font-variation-settings: "opsz" 144, "SOFT" 60, "wght" 340; font-style: italic; font-size: clamp(30px, 5vw, 52px); letter-spacing: -0.02em; line-height: 1.18; max-width: 22ch; margin: 0 auto; }
+  .credit p { color: var(--ink-soft); max-width: 54ch; margin: 26px auto 0; font-size: 17px; }
+  .credit .who { color: var(--accent-ink); font-style: italic; }
+
+  /* footer */
+  footer { border-top: 1px solid var(--rule); padding: 54px 0 70px; }
+  footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 30px; align-items: flex-start; }
+  footer .f-brand .mark { font-family: var(--display); font-variation-settings: "opsz" 144, "SOFT" 30, "wght" 500; font-size: 26px; letter-spacing: -0.03em; }
+  footer .f-brand p { color: var(--ink-quiet); font-size: 14px; margin: 8px 0 0; max-width: 30ch; }
+  footer .cols { display: flex; gap: 56px; flex-wrap: wrap; }
+  footer .col h4 { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); margin: 0 0 14px; font-weight: 500; }
+  footer .col a { display: block; text-decoration: none; color: var(--ink-soft); font-size: 15px; padding: 4px 0; transition: color 160ms; }
+  footer .col a:hover { color: var(--accent-ink); }
+  .colophon { margin-top: 46px; padding-top: 22px; border-top: 1px solid var(--rule-soft); color: var(--ink-faint); font-size: 13px; font-family: var(--mono); letter-spacing: 0.04em; }
+
+  /* reveal animation */
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity 700ms var(--ease), transform 700ms var(--ease); }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1) translateY(-2px); } 50% { opacity: 0.45; transform: scale(0.8) translateY(-2px); } }
+  @keyframes blink { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }
+  @keyframes wave { 0%,100% { transform: scaleY(0.5); } 50% { transform: scaleY(1.2); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .reveal { opacity: 1; transform: none; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="#top"><img class="brand-icon" src="icon.png" alt="" width="28" height="28" /><span class="mark">Yawp</span><span class="dot" aria-hidden="true"></span></a>
+    <nav class="links">
+      <a class="hide-sm" href="#features">Features</a>
+      <a class="hide-sm" href="#ai">AI</a>
+      <a class="hide-sm" href="#install">Install</a>
+      <a class="hide-sm" href="#roadmap">Roadmap</a>
+      <a class="ghost-btn" href="https://github.com/bebhuvan/yawp">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <blockquote class="epigraph reveal">
+        <span class="qtext">I sound my barbaric <em>yawp</em> over the roofs of the world.</span>
+        <cite>Walt Whitman · Song of Myself</cite>
+      </blockquote>
+
+      <h1 class="hero-title display reveal">Talk. It's <span class="em">text.</span></h1>
+
+      <p class="lede reveal">Press a hotkey, speak, and the words land wherever your cursor already is —
+        terminal, editor, browser, chat. Every byte of audio stays on your machine.</p>
+
+      <div class="hero-cta reveal">
+        <a class="btn-primary" href="#install">
+          <span aria-hidden="true">↓</span> Install Yawp
+        </a>
+        <a class="btn-text" href="https://github.com/bebhuvan/yawp">View source →</a>
+      </div>
+
+      <div class="meta-row eyebrow reveal">
+        <span>Local-first</span><span class="sep">·</span>
+        <span>Linux</span><span class="sep">·</span>
+        <span>Free &amp; open source</span><span class="sep">·</span>
+        <span>MIT</span>
+      </div>
+
+      <!-- live dictation demo -->
+      <div class="demo reveal" aria-hidden="true">
+        <div class="demo-top">
+          <span class="rec"><b></b> REC</span>
+          <span class="waves"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="hint">hold <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>V</kbd> &amp; speak</span>
+        </div>
+        <div class="demo-body">
+          <div class="spoken">you said&thinsp;: <span class="q" id="say">“let's grab lunch tomorrow”</span></div>
+          <div class="typed"><span id="type"></span><span class="caret"></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHAT / WHY -->
+  <section class="band" id="why">
+    <div class="wrap">
+      <div class="sec-head reveal"><span class="numeral">I</span>
+        <h2>Dictation that respects you</h2></div>
+      <p class="sec-sub reveal">The Linux options were thin: cloud tools that ship your voice to a
+        server, or a manual open-Whisper-and-paste dance. Yawp is the third way.</p>
+
+      <div class="pillars">
+        <div class="pillar reveal">
+          <h3>All local</h3>
+          <p>Audio is transcribed on your machine by <span class="mono" style="font-size:14px">faster-whisper</span>.
+            No accounts, no cloud, no telemetry. Notes live in a SQLite file at <span class="mono" style="font-size:13px">~/.voice</span>.</p>
+        </div>
+        <div class="pillar reveal">
+          <h3>Hotkey → text</h3>
+          <p>No window to focus, no button to find. A global hotkey records; the
+            transcript is typed straight into whatever app holds your cursor.</p>
+        </div>
+        <div class="pillar reveal">
+          <h3>Works everywhere</h3>
+          <p>Terminals, editors, browsers, chat — even SSH sessions — via
+            <span class="mono" style="font-size:13px">xdotool</span> / <span class="mono" style="font-size:13px">wtype</span>. It feels native to the OS.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="band" id="features">
+    <div class="wrap">
+      <div class="sec-head reveal"><span class="numeral">II</span>
+        <h2>What you get</h2></div>
+      <p class="sec-sub reveal">A real notes tool, not a transcription toy. Everything below ships today.</p>
+
+      <div class="features">
+        <div class="feat reveal"><div class="k"><span class="n">01</span><h3>Two hotkeys</h3></div>
+          <p><span class="kbd">Ctrl+Alt+V</span> types into the focused window. <span class="kbd">Ctrl+Alt+N</span>
+            saves a note in the library. Both also work as hold-to-talk.</p></div>
+
+        <div class="feat reveal"><div class="k"><span class="n">02</span><h3>A notes library</h3></div>
+          <p>Full-text searchable (SQLite FTS5), editable, taggable, foldered, and
+            exportable to Markdown for Obsidian, Bear, or iA Writer.</p></div>
+
+        <div class="feat reveal"><div class="k"><span class="n">03</span><h3>Ask your notes</h3></div>
+          <p>Pose a question and get an answer grounded in your own notes, with the
+            source notes cited. Retrieval is local; phrasing uses your model.</p></div>
+
+        <div class="feat reveal"><div class="k"><span class="n">04</span><h3>Polish &amp; grammar</h3></div>
+          <p>Three opt-in tiers: instant regex cleanup, a LanguageTool grammar pass,
+            and a conservative OpenRouter copy-edit — each reviewable before it applies.</p></div>
+
+        <div class="feat reveal"><div class="k"><span class="n">05</span><h3>Smart organization</h3></div>
+          <p>Notes earn summaries, a type, people, projects, and stronger tags.
+            Confident ones can auto-file into folders — your manual moves are never overwritten.</p></div>
+
+        <div class="feat reveal"><div class="k"><span class="n">06</span><h3>Play it back</h3></div>
+          <p>Every note keeps its audio. Replay it, or click any line of the transcript
+            to hear that moment. Action items extract into a checklist.</p></div>
+
+        <div class="feat reveal"><div class="k"><span class="n">07</span><h3>Voice commands</h3></div>
+          <p>Say “period”, “new paragraph”, “scratch that”, “all caps next”. Off by
+            default; flip it on when you want hands-free punctuation.</p></div>
+
+        <div class="feat reveal"><div class="k"><span class="n">08</span><h3>Editorial UI</h3></div>
+          <p>Serif typography, paper white, one quiet accent. Bulk-select, a real trash
+            with restore, and a cache panel that shows exactly what's on disk.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- LOOK INSIDE -->
+  <section class="band" id="look">
+    <div class="wrap">
+      <div class="sec-head reveal"><span class="numeral">III</span>
+        <h2>A look inside</h2></div>
+      <p class="sec-sub reveal">Editorial and calm — serif type on paper white, one quiet red. A tool you
+        actually want to sit with, not another dashboard.</p>
+      <div class="shots">
+        <figure class="shot reveal">
+          <img src="shot-library.png" alt="The Yawp notes library" loading="lazy" />
+          <figcaption>The library — searchable, foldered, tagged</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <img src="shot-note.png" alt="A note open in detail" loading="lazy" />
+          <figcaption>A note — polish, grammar &amp; action items</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <img src="shot-settings.png" alt="The settings screen" loading="lazy" />
+          <figcaption>Settings — local model, hotkeys &amp; more</figcaption>
+        </figure>
+        <figure class="shot reveal">
+          <img src="shot-ask.png" alt="Ask your notes" loading="lazy" />
+          <figcaption>Ask your notes</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI -->
+  <section class="band" id="ai">
+    <div class="wrap">
+      <div class="sec-head reveal"><span class="numeral">IV</span>
+        <h2>AI, optional and yours</h2></div>
+      <p class="sec-sub reveal">Yawp works fully offline. The smart bits are an opt-in upgrade you control —
+        bring your own key, pick a free model, and nothing leaves your machine unless you say so.</p>
+
+      <div class="ai-grid">
+        <div class="ai-card reveal">
+          <span class="badge">Bring your own model</span>
+          <h3>OpenRouter, your key</h3>
+          <p>Drop in a free <span class="mono">OpenRouter</span> key and choose from a curated set of
+            zero-cost models — or paste any model ID, free or paid. The key is stored only in
+            <span class="mono">~/.voice</span> and never echoed back.</p>
+        </div>
+        <div class="ai-card reveal">
+          <span class="badge">No key required</span>
+          <h3>Works without it</h3>
+          <p>Every AI feature falls back to a local, rule-based path. No key, no network — Yawp still
+            cleans, tags, and organizes. The model is an upgrade, never a dependency.</p>
+        </div>
+        <div class="ai-card reveal">
+          <span class="badge">What it powers</span>
+          <h3>From edit to answer</h3>
+          <p>Conservative copy-edit &amp; polish, sharper auto-tags, one-line summaries,
+            action-item extraction, confidence-gated auto-filing with your own categorization
+            prompt, and ask-your-notes answers grounded in your library.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INSTALL -->
+  <section class="band" id="install">
+    <div class="wrap">
+      <div class="sec-head reveal"><span class="numeral">V</span>
+        <h2>Install in one command</h2></div>
+      <p class="sec-sub reveal">Linux today. You'll need Rust, Node&nbsp;20+, and Python&nbsp;3.11+ on your
+        PATH — the script handles the rest (and uses <span class="mono" style="font-size:14px">uv</span> when present).</p>
+
+      <div class="code reveal">
+        <div class="top"><i></i><i></i><i></i></div>
+        <pre><span class="c"># clone, then run the one-shot installer</span>
+<span class="p">git</span> clone https://github.com/bebhuvan/yawp.git
+<span class="p">cd</span> yawp
+<span class="p">./install.sh</span>
+
+<span class="c"># it builds the app, sets up the venv, and writes</span>
+<span class="c"># systemd user units so the sidecar + hotkey daemon</span>
+<span class="c"># start on login. then just press Ctrl+Alt+V.</span></pre>
+      </div>
+
+      <p class="install-note reveal">If a build step complains, install the system libraries:
+        <code>sudo apt install libwebkit2gtk-4.1-dev build-essential libxdo-dev portaudio19-dev ffmpeg xdotool</code>
+        (add <code>wtype</code> on Wayland).</p>
+      <p class="install-note reveal">Tagged releases also publish checksummed <code>.deb</code> / <code>.AppImage</code> bundles.
+        The bundle is the desktop app — the transcription sidecar still comes from <code>install.sh</code>
+        until the single-binary install lands (see the roadmap).</p>
+    </div>
+  </section>
+
+  <!-- ROADMAP -->
+  <section class="band" id="roadmap">
+    <div class="wrap">
+      <div class="sec-head reveal"><span class="numeral">VI</span>
+        <h2>Where it's going</h2></div>
+      <p class="sec-sub reveal">Yawp is young. Here's the shape of what's next — contributions welcome.</p>
+
+      <div class="road">
+        <div class="road-item reveal">
+          <span class="tag next">Up next</span>
+          <div>
+            <h3>One-download install</h3>
+            <p>Bundle the Python sidecar (PyInstaller, or as a Tauri sidecar) so a
+              single downloaded binary just works — no toolchain, no build, no terminal.</p>
+          </div>
+        </div>
+        <div class="road-item reveal">
+          <span class="tag">Platforms</span>
+          <div>
+            <h3>Windows &amp; macOS</h3>
+            <p>Tauri already runs on both. The work is the keystroke-injection layer
+              (today's <span class="mono" style="font-size:13px">xdotool</span>/<span class="mono" style="font-size:13px">wtype</span> is Linux-only) and packaging + autostart per OS.</p>
+          </div>
+        </div>
+        <div class="road-item reveal">
+          <span class="tag">Productivity</span>
+          <div>
+            <h3>A spoken productivity layer</h3>
+            <p>To-do lists you dictate and check off, daily notes, spoken reminders, a
+              command palette, and a calendar-style review of what you captured this week.</p>
+          </div>
+        </div>
+        <div class="road-item reveal">
+          <span class="tag">Intelligence</span>
+          <div>
+            <h3>Real semantic search</h3>
+            <p>Local embeddings + a vector index so “ask your notes” retrieves by meaning,
+              not just keywords — entirely offline. Plus segment-accurate click-to-seek.</p>
+          </div>
+        </div>
+        <div class="road-item reveal">
+          <span class="tag">Ideas</span>
+          <div>
+            <h3>Thoughtful extras</h3>
+            <p>Meeting mode with speaker hints, dictation snippets &amp; templates,
+              re-transcribe a note with a better model, an optional end-to-end-encrypted sync,
+              and pluggable ASR backends with an in-app model manager.</p>
+          </div>
+        </div>
+        <div class="road-item reveal">
+          <span class="tag">Architecture</span>
+          <div>
+            <h3>Sturdier foundations</h3>
+            <p>Split the monolithic settings &amp; API layers into focused modules, add
+              an integration test harness across the three processes, debounce + cancel
+              in-flight requests, and a typed event bus between sidecar and app.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CLAUDE CREDIT -->
+  <section class="band" id="credit">
+    <div class="wrap credit">
+      <p class="mark-big reveal">Written by Claude &amp; OpenAI Codex.</p>
+      <p class="reveal">Every line — the Rust shell, the Python sidecar, the React library, this page —
+        was built by two AI coding assistants, <span class="who">Claude</span> (Anthropic) and
+        <span class="who">OpenAI Codex</span>, working alongside their human collaborator. An experiment
+        in how far a thoughtful tool can be carried by models that sweat the details. The barbaric yawp,
+        it turns out, compiles.</p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="f-brand">
+      <div class="mark">Yawp</div>
+      <p>Local-first voice dictation for Linux. Your voice never leaves the machine.</p>
+    </div>
+    <div class="cols">
+      <div class="col">
+        <h4>Project</h4>
+        <a href="https://github.com/bebhuvan/yawp">GitHub</a>
+        <a href="https://github.com/bebhuvan/yawp/releases">Releases</a>
+        <a href="#install">Install</a>
+        <a href="#roadmap">Roadmap</a>
+      </div>
+      <div class="col">
+        <h4>Docs</h4>
+        <a href="https://github.com/bebhuvan/yawp/blob/main/docs/ARCHITECTURE.md">Architecture</a>
+        <a href="https://github.com/bebhuvan/yawp/blob/main/PRIVACY.md">Privacy</a>
+        <a href="https://github.com/bebhuvan/yawp/blob/main/SECURITY.md">Security</a>
+        <a href="https://github.com/bebhuvan/yawp/blob/main/CHANGELOG.md">Changelog</a>
+      </div>
+      <div class="col">
+        <h4>Maker</h4>
+        <a href="https://bebhuvan.com" target="_blank" rel="noreferrer noopener">Website</a>
+        <a href="https://x.com/bebhuvan" target="_blank" rel="noreferrer noopener">Twitter / X</a>
+        <a href="https://www.linkedin.com/in/bebhuvan/" target="_blank" rel="noreferrer noopener">LinkedIn</a>
+        <a href="https://bhuvan.substack.com" target="_blank" rel="noreferrer noopener">Substack</a>
+      </div>
+    </div>
+  </div>
+  <div class="wrap"><p class="colophon">MIT © 2026 Bhuvanesh R · Fraunces &amp; Source Serif 4 · built by Claude &amp; OpenAI Codex</p></div>
+</footer>
+
+<script>
+  // Staggered scroll reveals
+  (function () {
+    var items = Array.prototype.slice.call(document.querySelectorAll('.reveal'));
+    if (!('IntersectionObserver' in window)) { items.forEach(function (el) { el.classList.add('in'); }); return; }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          var el = e.target;
+          var sibs = Array.prototype.slice.call(el.parentElement.querySelectorAll(':scope > .reveal'));
+          var i = Math.max(0, sibs.indexOf(el));
+          el.style.transitionDelay = (i % 6) * 70 + 'ms';
+          el.classList.add('in');
+          io.unobserve(el);
+        }
+      });
+    }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+    items.forEach(function (el) { io.observe(el); });
+  })();
+
+  // Hero dictation typewriter — whimsical, on brand
+  (function () {
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var typeEl = document.getElementById('type');
+    var sayEl = document.getElementById('say');
+    if (!typeEl) return;
+    var lines = [
+      { say: '“let’s grab lunch tomorrow”', text: "let's grab lunch tomorrow" },
+      { say: '“todo, ship the landing page”', text: 'TODO: ship the landing page' },
+      { say: '“new paragraph, dear team…”', text: 'Dear team, thanks for the demo —' }
+    ];
+    if (reduce) { typeEl.textContent = lines[0].text; sayEl.textContent = lines[0].say; return; }
+    var li = 0;
+    function run() {
+      var line = lines[li];
+      sayEl.textContent = line.say;
+      var i = 0;
+      typeEl.textContent = '';
+      var typer = setInterval(function () {
+        typeEl.textContent = line.text.slice(0, ++i);
+        if (i >= line.text.length) {
+          clearInterval(typer);
+          setTimeout(erase, 2100);
+        }
+      }, 52);
+      function erase() {
+        var j = line.text.length;
+        var er = setInterval(function () {
+          typeEl.textContent = line.text.slice(0, --j);
+          if (j <= 0) { clearInterval(er); li = (li + 1) % lines.length; setTimeout(run, 420); }
+        }, 26);
+      }
+    }
+    run();
+  })();
+</script>
+</body>
+</html>

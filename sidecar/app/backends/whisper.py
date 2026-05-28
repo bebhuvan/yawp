@@ -9,8 +9,8 @@ from typing import Optional, Union
 import numpy as np
 from faster_whisper import WhisperModel
 
-from ..asr import ASRBackend, TranscriptResult, Segment
 from .. import config
+from ..asr import Segment, TranscriptResult
 
 
 log = logging.getLogger("voice.asr")

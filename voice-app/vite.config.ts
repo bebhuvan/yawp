@@ -9,6 +9,12 @@ export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
   clearScreen: false,
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: "./src/test/setup.ts",
+    exclude: ["node_modules/**", "dist/**", "tests/e2e/**"],
+  },
   server: {
     port: 1420,
     strictPort: true,

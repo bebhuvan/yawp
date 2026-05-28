@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUT_DIR="${1:-$ROOT/yawp-debug-bundle-$(date +%Y%m%d-%H%M%S)}"
+
+mkdir -p "$OUT_DIR"
+
+"$ROOT/scripts/doctor" > "$OUT_DIR/diagnostics.json" 2> "$OUT_DIR/doctor.stderr" || true
+journalctl --user -u yawp-sidecar --since "30 minutes ago" > "$OUT_DIR/yawp-sidecar.log" 2>&1 || true
+journalctl --user -u yawp-daemon --since "30 minutes ago" > "$OUT_DIR/yawp-daemon.log" 2>&1 || true
+systemctl --user status yawp-sidecar --no-pager > "$OUT_DIR/yawp-sidecar.status" 2>&1 || true
+systemctl --user status yawp-daemon --no-pager > "$OUT_DIR/yawp-daemon.status" 2>&1 || true
+
+{
+  echo "Yawp debug bundle"
+  echo "Created: $(date -Is)"
+  echo "Root: $ROOT"
+  echo
+  echo "Git:"
+  git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true
+  git -C "$ROOT" status --short 2>/dev/null || true
+} > "$OUT_DIR/README.txt"
+
+tar -C "$(dirname "$OUT_DIR")" -czf "$OUT_DIR.tar.gz" "$(basename "$OUT_DIR")"
+echo "$OUT_DIR.tar.gz"

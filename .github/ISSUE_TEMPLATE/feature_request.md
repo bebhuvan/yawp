@@ -1,21 +1,24 @@
 ---
 name: Feature request
-about: Suggest a new capability or change
+about: Suggest a focused improvement
+title: ""
 labels: enhancement
+assignees: ""
 ---
 
-## What you'd like
+## Problem
 
-<!-- One paragraph describing the feature. -->
+What user problem should this solve?
 
-## Why it matters
+## Proposal
 
-<!-- The workflow it unlocks or the pain it removes. Concrete > abstract. -->
+What should Yawp do?
 
-## How you'd see it work
+## Constraints
 
-<!-- A sketch — keyboard shortcut, settings option, UI placement, etc. -->
+Does this affect privacy, local-first behavior, hotkeys, packaging, or OpenRouter?
 
-## Alternatives considered
+## Alternatives
 
-<!-- Optional: workarounds you've tried, similar features in other tools. -->
+What did you try or consider?
+

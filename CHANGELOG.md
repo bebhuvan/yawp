@@ -1,0 +1,71 @@
+# Changelog
+
+All notable changes to Yawp are documented here. Dates are absolute.
+
+## [0.2.0] — 2026-05-28
+
+### Fixed
+- **Window black-screen / launch flicker (Linux/WebKitGTK).** The window now
+  starts hidden and is revealed only after the frontend paints its first frame
+  (`app-ready` event), eliminating the black pre-paint flash. Regaining focus,
+  showing from the tray, and re-showing after the display sleeps now force a
+  GTK-level repaint, fixing the "fully black window after long idle" case. The
+  renderer env vars were trimmed to only `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+  (kept) — forcing software rendering / disabling compositing was removed
+  because it *caused* the stale-buffer repaint failures rather than fixing them.
+- **Polish dumped model "thinking" into notes.** Reasoning models (e.g. the
+  default `openai/gpt-oss-20b:free`) returned chain-of-thought in a separate
+  channel; the code surfaced it as the result. OpenRouter requests now exclude
+  reasoning, never fall back to the `reasoning` field, and reserve more tokens
+  so the answer isn't starved.
+- **Mouse text selection** of a note's transcript (the global `user-select:
+  none` previously blocked all selection).
+- **VAD auto-stop race** in the daemon: `state.auto_stop` is bound to a local
+  before `feed()` so it can't be nulled mid-check on another thread.
+
+### Added
+- **Update notifications.** Settings checks the GitHub Releases API and, when a
+  newer version exists, shows a prominent (but dismissible) banner at the top of
+  Settings with a "View release" link; otherwise a quiet version/"up to date"
+  status with a manual "Check" in the Settings footer. No background calls — the
+  check runs when Settings opens or on demand.
+- **Bulk delete:** multi-select notes in the Library with a single batched
+  undo (`/notes/bulk-delete`, `/notes/bulk-restore`).
+- **Trash view:** browse, restore, or permanently empty deleted notes
+  (`/notes/trash`, `/notes/{id}/purge`, `/notes/empty-trash`).
+- **Ask your notes:** ask a question and get an answer grounded in your own
+  notes, with citations (`/ask`). Retrieval uses the existing full-text search;
+  synthesis uses your OpenRouter model (no new dependencies or vector store).
+- **Cache cleanup panel** in Settings: live disk usage for downloaded models,
+  the LanguageTool ruleset, orphaned audio, and trash, each with a Clear button
+  (`/cache`, `/cache/clear`).
+- **Auto-categorization controls:** an editable categorization prompt and a
+  "Reorganize existing notes" action (`/notes/reorganize`).
+- **Open-note view** now has audio playback, grammar check, tag editing, and
+  an action-items panel (previously only present in an unused component).
+- **Click-to-seek transcript:** clicking a line plays the audio from roughly
+  that point (proportional, since per-segment timestamps aren't persisted).
+- **Settings:** the long ASR model list is now a collapsible disclosure.
+
+### Performance
+- **Clipboard paste for dictation.** Paste mode now delivers text by setting the
+  clipboard and sending the paste shortcut (terminal-aware: Ctrl+Shift+V in
+  terminals, Ctrl+V elsewhere) instead of typing it character-by-character — so
+  a long dictation appears instantly instead of crawling out, especially in
+  editors like Zed and terminal apps. Restores the prior clipboard afterward,
+  and falls back to typing when no clipboard tool (`xclip` / `wl-copy`) is
+  present. Toggle in Settings → Hotkeys ("Paste via clipboard").
+
+### Removed
+- The dead `/stream` live-transcription path: the WebSocket endpoint, the
+  `live_transcription_enabled` setting, and its (no-op) Settings toggle. The
+  frontend never opened the socket.
+- Dead code: the unused `NoteDetail` component, `cn` / `groupByDay` /
+  `localAsrModelById` / `sidecarStreamUrl` helpers, and the orphaned `clsx`
+  dependency.
+
+### Changed
+- **`install.sh` prefers [uv](https://github.com/astral-sh/uv)** for the sidecar
+  virtualenv and dependency install when available (much faster for the heavy
+  ML deps), falling back to `python3 -m venv` + `pip` otherwise. The resulting
+  `.venv/bin/python` layout is unchanged, so the systemd units are untouched.

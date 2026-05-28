@@ -1,9 +1,3 @@
-import clsx, { type ClassValue } from "clsx";
-
-export function cn(...inputs: ClassValue[]) {
-  return clsx(inputs);
-}
-
 export function formatTime(date: Date): string {
   const h = date.getHours();
   const m = date.getMinutes().toString().padStart(2, "0");
@@ -41,18 +35,3 @@ export function longDate(date: Date): string {
   });
 }
 
-export function groupByDay<T extends { createdAt: Date }>(
-  items: T[],
-): { day: string; date: Date; items: T[] }[] {
-  const sorted = [...items].sort(
-    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-  );
-  const buckets = new Map<string, { day: string; date: Date; items: T[] }>();
-  for (const item of sorted) {
-    const day = relativeDay(item.createdAt);
-    const bucket = buckets.get(day);
-    if (bucket) bucket.items.push(item);
-    else buckets.set(day, { day, date: item.createdAt, items: [item] });
-  }
-  return Array.from(buckets.values());
-}

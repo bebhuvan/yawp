@@ -13,6 +13,7 @@ interface RecorderProps {
   onCancel: () => void;
   partial: string;
   level: number;
+  autoStopEnabled: boolean;
 }
 
 // Silence threshold + window are the same heuristics the in-browser recorder
@@ -31,6 +32,7 @@ export function Recorder({
   onCancel,
   partial,
   level,
+  autoStopEnabled,
 }: RecorderProps) {
   const [elapsed, setElapsed] = useState(0);
   // Track when silence started so we can show a countdown to auto-stop.
@@ -47,7 +49,7 @@ export function Recorder({
   }, [state]);
 
   useEffect(() => {
-    if (state !== "recording") {
+    if (state !== "recording" || !autoStopEnabled) {
       setSilenceSince(null);
       return;
     }
@@ -62,7 +64,7 @@ export function Recorder({
     } else {
       setSilenceSince(null);
     }
-  }, [state, level, elapsed]);
+  }, [state, level, elapsed, autoStopEnabled]);
 
   if (!open) return null;
 

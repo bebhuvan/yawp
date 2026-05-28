@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # required to publish the GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: voice-app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            portaudio19-dev \
+            libportaudio2 \
+            ffmpeg \
+            xdotool \
+            xclip
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv sidecar/.venv
+          sidecar/.venv/bin/python -m pip install --upgrade pip
+          sidecar/.venv/bin/python -m pip install -r sidecar/requirements.txt -r sidecar/requirements-dev.txt
+
+      - name: Install frontend dependencies
+        working-directory: voice-app
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: voice-app
+        run: npx playwright install --with-deps chromium
+
+      - name: Run quality gate
+        run: ./scripts/check
+
+      - name: Build Tauri bundles
+        working-directory: voice-app
+        run: npm run tauri build
+
+      - name: Collect release artifacts
+        run: |
+          mkdir -p release-artifacts
+          find voice-app/src-tauri/target/release/bundle -type f \
+            \( -name "*.deb" -o -name "*.AppImage" \) \
+            -exec cp {} release-artifacts/ \;
+          (cd release-artifacts && sha256sum * > SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yawp-linux
+          path: release-artifacts/*
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/*.deb
+            release-artifacts/*.AppImage
+            release-artifacts/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: true

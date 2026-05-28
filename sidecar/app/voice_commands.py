@@ -215,7 +215,7 @@ def _drop_last_word(buf: list[str]) -> None:
         buf.clear()
         return
     trimmed = s[: m.start()].rstrip()
-    if trimmed and not trimmed[-1] in ".,;:!?":
+    if trimmed and trimmed[-1] not in ".,;:!?":
         trimmed = trimmed + " "
     buf.clear()
     buf.extend(trimmed)

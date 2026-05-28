@@ -61,9 +61,9 @@ export function Toast({
               toast.action?.onClick();
               onDismiss();
             }}
-            className="font-serif text-[13.5px] cursor-pointer transition-colors hover:opacity-80"
+            className="font-serif text-[13.5px] text-ink cursor-pointer transition-opacity hover:opacity-70"
             style={{
-              color: "var(--color-accent)",
+              fontWeight: 500,
               letterSpacing: "-0.005em",
             }}
           >

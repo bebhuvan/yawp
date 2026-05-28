@@ -11,6 +11,8 @@ node_modules/
 dist/
 dist-ssr/
 *.local
+test-results/
+playwright-report/
 
 # Rust / Tauri
 # Cargo.lock IS tracked — this is a binary, and reproducible builds need it.
@@ -33,3 +35,6 @@ Thumbs.db
 *.swp
 *.swo
 *.tmp
+
+# Local runtime state
+.qdrant-initialized
