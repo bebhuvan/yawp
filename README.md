@@ -2,6 +2,8 @@
 
 > *"I sound my barbaric yawp over the roofs of the world."* — Walt Whitman
 
+**Website: [bebhuvan.github.io/yawp](https://bebhuvan.github.io/yawp/)** · [Releases](https://github.com/bebhuvan/yawp/releases) · MIT
+
 **Local-first voice dictation for Linux.** Press a hotkey, talk, and the
 transcript appears wherever your cursor is — terminal, editor, browser, chat.
 Every byte of audio stays on your machine.
