@@ -277,6 +277,14 @@
   .credit p { color: var(--ink-soft); max-width: 54ch; margin: 26px auto 0; font-size: 17px; }
   .credit .who { color: var(--accent-ink); font-style: italic; }
 
+  /* maker coda */
+  .maker { text-align: center; padding: 64px 0 72px; border-top: 1px solid var(--rule-soft); }
+  .maker-line { font-family: var(--serif); font-size: 18px; line-height: 1.7; color: var(--ink-soft); max-width: 56ch; margin: 0 auto; }
+  .maker-line strong { color: var(--ink); font-weight: 600; }
+  .maker-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 24px; margin-top: 26px; }
+  .maker-links a { font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; color: var(--ink-quiet); text-decoration: none; border-bottom: 1px solid var(--rule); padding-bottom: 3px; transition: color 160ms var(--ease), border-color 160ms var(--ease); }
+  .maker-links a:hover { color: var(--accent-ink); border-color: var(--accent-ink); }
+
   /* footer */
   footer { border-top: 1px solid var(--rule); padding: 54px 0 70px; }
   footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 30px; align-items: flex-start; }
@@ -599,6 +607,24 @@
     </div>
   </section>
 
+  <!-- MAKER -->
+  <section class="maker">
+    <div class="wrap">
+      <p class="maker-line reveal">
+        <strong>Made by Bhuvanesh R</strong> — who can't write a line of code. I described what I
+        wanted, said “make it less ugly” a great many times, and let Claude and OpenAI Codex do
+        the actual typing. Now there's a real app and I've started calling myself a software
+        developer. Please don't ask me to prove it.
+      </p>
+      <div class="maker-links reveal">
+        <a href="https://bebhuvan.com" target="_blank" rel="noreferrer noopener">Website</a>
+        <a href="https://x.com/bebhuvan" target="_blank" rel="noreferrer noopener">Twitter / X</a>
+        <a href="https://www.linkedin.com/in/bebhuvan/" target="_blank" rel="noreferrer noopener">LinkedIn</a>
+        <a href="https://bhuvan.substack.com" target="_blank" rel="noreferrer noopener">Substack</a>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <footer>
@@ -621,13 +647,6 @@
         <a href="https://github.com/bebhuvan/yawp/blob/main/PRIVACY.md">Privacy</a>
         <a href="https://github.com/bebhuvan/yawp/blob/main/SECURITY.md">Security</a>
         <a href="https://github.com/bebhuvan/yawp/blob/main/CHANGELOG.md">Changelog</a>
-      </div>
-      <div class="col">
-        <h4>Maker</h4>
-        <a href="https://bebhuvan.com" target="_blank" rel="noreferrer noopener">Website</a>
-        <a href="https://x.com/bebhuvan" target="_blank" rel="noreferrer noopener">Twitter / X</a>
-        <a href="https://www.linkedin.com/in/bebhuvan/" target="_blank" rel="noreferrer noopener">LinkedIn</a>
-        <a href="https://bhuvan.substack.com" target="_blank" rel="noreferrer noopener">Substack</a>
       </div>
     </div>
   </div>
