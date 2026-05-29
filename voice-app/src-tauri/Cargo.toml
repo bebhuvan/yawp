@@ -1,6 +1,6 @@
 [package]
 name = "voice-app"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local-first Linux voice dictation and notes"
 authors = ["Yawp contributors"]
 edition = "2021"

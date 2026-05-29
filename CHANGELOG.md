@@ -2,6 +2,32 @@
 
 All notable changes to Yawp are documented here. Dates are absolute.
 
+## [0.2.1] — 2026-05-29
+
+### Fixed
+- **Tray showed the old "voice app" name and a default gear icon.** The bundled
+  binary was still named `voice-app` (the original project folder), so the
+  window's `WM_CLASS` was `voice-app` even though the title said "Yawp". On
+  GNOME the tray/StatusNotifier resolves an indicator's name and icon from that
+  class, so it displayed "voice app" + the fallback gear (no `voice-app` icon
+  exists). Setting `mainBinaryName: "yawp"` makes the binary — and therefore
+  `WM_CLASS`, the generated desktop entry's `Exec`/`Icon`/`StartupWMClass` — all
+  `yawp`, which matches the installed `yawp` icon.
+- **Window staying fully black after the display sleeps / the app sits idle.**
+  The repaint nudge used `queue_draw()`, which only re-blits WebKit's existing
+  backing buffer — when that buffer was discarded on occlusion it just re-showed
+  the stale black surface. It now also calls `queue_resize()` on the webview,
+  forcing a real size-allocate so WebKit re-renders from scratch. This does not
+  resize the OS window, so it avoids the hangs an actual window-resize toggle
+  caused.
+
+### Changed
+- **Force the X11 backend (`GDK_BACKEND=x11`).** The GTK/WebKit Wayland backend
+  crashes under Tauri ([tauri#8541](https://github.com/tauri-apps/tauri/issues/8541));
+  pinning X11/XWayland everywhere (set in the app and in the installed `.desktop`
+  `Exec`) avoids it. Mirrors what the sibling [Handy](https://github.com/cjpais/Handy)
+  app does.
+
 ## [0.2.0] — 2026-05-28
 
 ### Fixed

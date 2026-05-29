@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Yawp",
-  "version": "0.2.0",
+  "mainBinaryName": "yawp",
+  "version": "0.2.1",
   "identifier": "com.local.voice",
   "build": {
     "beforeDevCommand": "npm run dev",

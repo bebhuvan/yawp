@@ -27,18 +27,26 @@ toggle-paste, cancel, reload, restart, and logs."
         }
     }
 
-    // WebKitGTK leaves a blank/stale surface after the window is occluded on
-    // some Intel/Mesa + X11 stacks when accelerated compositing is active, and
-    // no amount of forcing a repaint on focus reliably recovers it. Disabling
-    // the DMA-BUF renderer and accelerated compositing routes WebKit through the
-    // older non-composited paint path, which doesn't lose its buffer. We keep
-    // hardware GL (no LIBGL_ALWAYS_SOFTWARE) — forcing llvmpipe was slow and
-    // hang-prone. Set before the webview is created so every launch path
-    // (.deb, AppImage, dev) gets it.
+    // WebKitGTK reliability knobs, set before the webview is created so every
+    // launch path (.deb, AppImage, dev) gets them.
+    //
+    //  - WEBKIT_DISABLE_DMABUF_RENDERER: the DMA-BUF renderer crashes / shows a
+    //    blank surface on various GPU/display-server stacks. Disabling it is the
+    //    one mitigation the sibling Handy app ships (tauri#9394) and it keeps
+    //    accelerated compositing intact.
+    //  - WEBKIT_DISABLE_COMPOSITING_MODE: additionally route WebKit through the
+    //    non-composited paint path, which doesn't lose its backing buffer when
+    //    the window is occluded / the display sleeps on Intel/Mesa + X11. Handy
+    //    does NOT need this (it bundles its own older WebKitGTK + a patched Tauri
+    //    runtime); we run against the system WebKitGTK, where 2.52.x regresses,
+    //    so we keep it until we bundle a known-good WebKit.
+    //  - GDK_BACKEND=x11: the GTK/WebKit Wayland backend crashes under Tauri
+    //    (tauri#8541); force X11/XWayland everywhere, as Handy does.
     #[cfg(target_os = "linux")]
     {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        std::env::set_var("GDK_BACKEND", "x11");
     }
 
     tauri::Builder::default()
@@ -144,11 +152,15 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg(target_os = "linux")]
 fn force_repaint<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use gtk::prelude::WidgetExt;
-    // Light, side-effect-free nudge. With accelerated compositing disabled the
-    // non-composited path repaints on its own, so this is just belt-and-braces
-    // — no window resizing (that caused hangs) and no extra threads.
+    // `queue_draw()` alone only re-blits WebKit's existing backing buffer — when
+    // that buffer was discarded on occlusion/display-sleep it just re-shows the
+    // stale (black) surface. `queue_resize()` forces a fresh size-allocate on the
+    // webview widget, which makes WebKit re-render from scratch. It does NOT
+    // resize the OS window (no WM round-trip), so it avoids the hangs an actual
+    // `gtk_window_resize` toggle caused. Belt-and-braces with a draw afterwards.
     let _ = window.with_webview(|webview| {
         let wv = webview.inner();
+        wv.queue_resize();
         wv.queue_draw();
     });
 }

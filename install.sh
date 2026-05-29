@@ -137,7 +137,7 @@ if (( USE_APPIMAGE )); then
 Type=Application
 Name=Yawp
 Comment=Local-first voice dictation
-Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 $HOME/.local/bin/Yawp.AppImage %U
+Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 GDK_BACKEND=x11 $HOME/.local/bin/Yawp.AppImage %U
 Icon=yawp
 Terminal=false
 Categories=Utility;AudioVideo;
