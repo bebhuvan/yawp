@@ -38,3 +38,6 @@ Thumbs.db
 
 # Local runtime state
 .qdrant-initialized
+
+# Local design notes (not part of the shipped repo)
+docs/V2_ARCHITECTURE.md
