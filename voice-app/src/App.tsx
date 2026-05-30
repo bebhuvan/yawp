@@ -16,6 +16,7 @@ import {
   type ServerFolder,
   type ServerNote,
 } from "./lib/api";
+import { writeToClipboard } from "./lib/clipboard";
 import { makeLogger } from "./lib/log";
 import { removeNote, replaceExistingNote, upsertNote } from "./lib/noteState";
 import { useNativeCapture } from "./lib/useNativeCapture";
@@ -240,7 +241,7 @@ function App() {
       setView("library");
     } else {
       try {
-        await navigator.clipboard.writeText(note.transcript);
+        await writeToClipboard(note.transcript);
         showToast("Transcript copied to clipboard.");
       } catch {
         showToast("Transcribed — couldn't access clipboard.");

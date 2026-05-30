@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, audioUrl, userMessage, type GrammarIssue } from "../lib/api";
+import { writeToClipboard } from "../lib/clipboard";
 import type { Folder, Note, Todo } from "../lib/types";
 import { formatDuration, formatTime, longDate } from "../lib/utils";
 import { Tag } from "./Tag";
@@ -68,7 +69,7 @@ export function SafeNoteDetail({
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await writeToClipboard(text);
       onToast("Copied.");
     } catch {
       onToast("Couldn't copy note.");
