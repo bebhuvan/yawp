@@ -64,11 +64,20 @@ toggle-paste, cancel, reload, restart, and logs."
                 // Regaining focus is the moment the user comes back to a window
                 // that may have been hidden or sat behind a sleeping display —
                 // exactly when WebKitGTK is prone to showing a stale black
-                // surface. Force a repaint so the content is there immediately.
+                // surface. Schedule the repaint asynchronously so it does NOT
+                // block the focus-in event on the GTK main thread: with
+                // WEBKIT_DISABLE_COMPOSITING_MODE=1 the software-render path
+                // in WebKitGTK 2.52 blocks the GTK main loop until the full
+                // page repaint completes, which causes an apparent freeze on
+                // every click that brings the window to focus.
                 tauri::WindowEvent::Focused(true) => {
-                    if let Some(w) = window.get_webview_window(window.label()) {
-                        force_repaint(&w);
-                    }
+                    let handle = window.app_handle().clone();
+                    let label = window.label().to_string();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(w) = handle.get_webview_window(&label) {
+                            force_repaint(&w);
+                        }
+                    });
                 }
                 _ => {}
             }

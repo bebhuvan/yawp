@@ -1,12 +1,10 @@
 export function installWebkitRepaintRecovery() {
+  // Flush any pending WebKit layout so the compositor has fresh content to
+  // blit. Avoid the previous opacity:0.999 trick — with
+  // WEBKIT_DISABLE_COMPOSITING_MODE=1 that forced a new compositing layer on
+  // a disabled compositing path, which made blanks worse, not better.
   const poke = () => {
-    const root = document.getElementById("root");
-    if (!root) return;
-    root.style.opacity = "0.999";
-    void root.offsetHeight; // synchronous reflow
-    requestAnimationFrame(() => {
-      root.style.opacity = "";
-    });
+    requestAnimationFrame(() => void document.documentElement.offsetHeight);
   };
 
   window.addEventListener("focus", poke);
