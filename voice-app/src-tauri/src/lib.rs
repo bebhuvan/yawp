@@ -34,18 +34,19 @@ toggle-paste, cancel, reload, restart, and logs."
     //    blank surface on various GPU/display-server stacks. Disabling it is the
     //    one mitigation the sibling Handy app ships (tauri#9394) and it keeps
     //    accelerated compositing intact.
-    //  - WEBKIT_DISABLE_COMPOSITING_MODE: additionally route WebKit through the
-    //    non-composited paint path, which doesn't lose its backing buffer when
-    //    the window is occluded / the display sleeps on Intel/Mesa + X11. Handy
-    //    does NOT need this (it bundles its own older WebKitGTK + a patched Tauri
-    //    runtime); we run against the system WebKitGTK, where 2.52.x regresses,
-    //    so we keep it until we bundle a known-good WebKit.
+    //  - WEBKIT_DISABLE_COMPOSITING_MODE was previously set here to prevent
+    //    WebKitGTK from losing its backing buffer on occlusion/sleep. It was
+    //    removed because forcing software rendering caused the GTK main loop to
+    //    block for hundreds of milliseconds on every focus-in (queue_resize on
+    //    a software-rendered page), making the app appear frozen on every click.
+    //    With GPU compositing enabled, focus-in repaints are a cheap GPU blit.
+    //    If backing-buffer loss reappears, the force_repaint on show_main_window
+    //    and the async queue_draw on Focused(true) handle recovery.
     //  - GDK_BACKEND=x11: the GTK/WebKit Wayland backend crashes under Tauri
     //    (tauri#8541); force X11/XWayland everywhere, as Handy does.
     #[cfg(target_os = "linux")]
     {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
         std::env::set_var("GDK_BACKEND", "x11");
     }
 
@@ -61,21 +62,19 @@ toggle-paste, cancel, reload, restart, and logs."
                     api.prevent_close();
                     let _ = window.hide();
                 }
-                // Regaining focus is the moment the user comes back to a window
-                // that may have been hidden or sat behind a sleeping display —
-                // exactly when WebKitGTK is prone to showing a stale black
-                // surface. Schedule the repaint asynchronously so it does NOT
-                // block the focus-in event on the GTK main thread: with
-                // WEBKIT_DISABLE_COMPOSITING_MODE=1 the software-render path
-                // in WebKitGTK 2.52 blocks the GTK main loop until the full
-                // page repaint completes, which causes an apparent freeze on
-                // every click that brings the window to focus.
+                // On focus-in, ask WebKit to reblit its existing GPU surface.
+                // queue_draw() alone is sufficient here — with GPU compositing
+                // the backing texture survives normal occlusion, so this is a
+                // cheap blit rather than a full re-layout. We still do the
+                // heavier force_repaint (queue_resize + queue_draw) in
+                // show_main_window for the tray-restore path where the GTK
+                // widget was truly unmapped and the surface may be stale.
                 tauri::WindowEvent::Focused(true) => {
                     let handle = window.app_handle().clone();
                     let label = window.label().to_string();
                     tauri::async_runtime::spawn(async move {
                         if let Some(w) = handle.get_webview_window(&label) {
-                            force_repaint(&w);
+                            light_repaint(&w);
                         }
                     });
                 }
@@ -153,20 +152,12 @@ fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
-// Force WebKitGTK to re-render the page. After the window has been hidden to
-// the tray or the display has slept, the GTK widget can keep a stale (black)
-// backing buffer until something invalidates it; queueing a resize makes
-// WebKit re-allocate and repaint without any visible window resize. No-op on
-// platforms where this class of stale-buffer bug doesn't occur.
+// Full repaint — forces a fresh size-allocate so WebKit re-renders from
+// scratch. Use this after the window was truly unmapped (tray restore, initial
+// show) where the GPU surface may have been discarded.
 #[cfg(target_os = "linux")]
 fn force_repaint<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use gtk::prelude::WidgetExt;
-    // `queue_draw()` alone only re-blits WebKit's existing backing buffer — when
-    // that buffer was discarded on occlusion/display-sleep it just re-shows the
-    // stale (black) surface. `queue_resize()` forces a fresh size-allocate on the
-    // webview widget, which makes WebKit re-render from scratch. It does NOT
-    // resize the OS window (no WM round-trip), so it avoids the hangs an actual
-    // `gtk_window_resize` toggle caused. Belt-and-braces with a draw afterwards.
     let _ = window.with_webview(|webview| {
         let wv = webview.inner();
         wv.queue_resize();
@@ -176,6 +167,21 @@ fn force_repaint<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
 
 #[cfg(not(target_os = "linux"))]
 fn force_repaint<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>) {}
+
+// Lightweight repaint — reblits WebKit's existing GPU surface. With GPU
+// compositing the texture survives normal focus changes, so this is just a
+// cheap blit with no re-layout. Used on every focus-in event to avoid
+// blocking the GTK main loop with an expensive queue_resize.
+#[cfg(target_os = "linux")]
+fn light_repaint<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use gtk::prelude::WidgetExt;
+    let _ = window.with_webview(|webview| {
+        webview.inner().queue_draw();
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn light_repaint<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>) {}
 
 fn build_tray<R, M>(manager: &M) -> tauri::Result<tauri::tray::TrayIcon<R>>
 where
