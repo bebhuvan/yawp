@@ -4,6 +4,9 @@ const DEFAULT_BASE = "http://127.0.0.1:17893";
 const configuredBase = import.meta.env.VITE_YAWP_SIDECAR_URL;
 export const SIDECAR_BASE = (configuredBase || DEFAULT_BASE).replace(/\/+$/, "");
 
+const TIMEOUT_MS = 8_000;
+const LONG_TIMEOUT_MS = 120_000;
+
 export const AUDIO_BASE = `${SIDECAR_BASE}/audio`;
 
 export function sidecarUrl(path: string): string {
@@ -286,13 +289,13 @@ export function audioUrl(audioPath?: string | null): string | null {
 }
 
 export const api = {
-  health: () => call<Health>("Health check", () => fetch(sidecarUrl("/health"))),
+  health: () => call<Health>("Health check", () => fetch(sidecarUrl("/health"), { signal: AbortSignal.timeout(TIMEOUT_MS) })),
 
   diagnostics: () =>
-    call<Diagnostics>("Diagnostics", () => fetch(sidecarUrl("/diagnostics"))),
+    call<Diagnostics>("Diagnostics", () => fetch(sidecarUrl("/diagnostics"), { signal: AbortSignal.timeout(TIMEOUT_MS) })),
 
   cacheUsage: () =>
-    call<CacheUsage>("Cache usage", () => fetch(sidecarUrl("/cache"))),
+    call<CacheUsage>("Cache usage", () => fetch(sidecarUrl("/cache"), { signal: AbortSignal.timeout(TIMEOUT_MS) })),
 
   clearCache: (target: string) =>
     call<{ cleared: string; freed_bytes?: number; count?: number }>(
@@ -302,13 +305,14 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ target }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     ),
 
   async listNotes(): Promise<Note[]> {
     const json = await call<{ notes: ServerNote[] }>(
       "Loading notes",
-      () => fetch(sidecarUrl("/notes")),
+      () => fetch(sidecarUrl("/notes"), { signal: AbortSignal.timeout(TIMEOUT_MS) }),
     );
     return json.notes.map(fromServerNote);
   },
@@ -316,7 +320,7 @@ export const api = {
   async listFolders(): Promise<Folder[]> {
     const json = await call<{ folders: ServerFolder[] }>(
       "Loading folders",
-      () => fetch(sidecarUrl("/folders")),
+      () => fetch(sidecarUrl("/folders"), { signal: AbortSignal.timeout(TIMEOUT_MS) }),
     );
     return json.folders.map(fromServerFolder);
   },
@@ -329,6 +333,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     );
     return fromServerFolder(data);
@@ -342,6 +347,7 @@ export const api = {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     );
     return fromServerFolder(data);
@@ -350,7 +356,7 @@ export const api = {
   async deleteFolder(id: string): Promise<void> {
     let r: Response;
     try {
-      r = await fetch(sidecarUrl(`/folders/${id}`), { method: "DELETE" });
+      r = await fetch(sidecarUrl(`/folders/${id}`), { method: "DELETE", signal: AbortSignal.timeout(TIMEOUT_MS) });
     } catch (e) {
       throw new ApiError(friendly("Delete folder", 0, ""), 0, (e as Error)?.message);
     }
@@ -362,7 +368,7 @@ export const api = {
   async search(q: string): Promise<Note[]> {
     const json = await call<{ notes: ServerNote[] }>(
       "Search",
-      () => fetch(sidecarUrl(`/search?q=${encodeURIComponent(q)}`)),
+      () => fetch(sidecarUrl(`/search?q=${encodeURIComponent(q)}`), { signal: AbortSignal.timeout(TIMEOUT_MS) }),
     );
     return json.notes.map(fromServerNote);
   },
@@ -372,32 +378,32 @@ export const api = {
     fd.append("audio", audio, "audio.wav");
     return call<TranscribeResult>(
       "Transcription",
-      () => fetch(sidecarUrl("/transcribe"), { method: "POST", body: fd }),
+      () => fetch(sidecarUrl("/transcribe"), { method: "POST", body: fd, signal: AbortSignal.timeout(LONG_TIMEOUT_MS) }),
     );
   },
 
   captureStatus: () =>
     call<{ recording: boolean }>(
       "Recorder status",
-      () => fetch(sidecarUrl("/capture/status")),
+      () => fetch(sidecarUrl("/capture/status"), { signal: AbortSignal.timeout(TIMEOUT_MS) }),
     ),
 
   captureStart: () =>
     call<{ recording: boolean }>(
       "Starting recorder",
-      () => fetch(sidecarUrl("/capture/start"), { method: "POST" }),
+      () => fetch(sidecarUrl("/capture/start"), { method: "POST", signal: AbortSignal.timeout(TIMEOUT_MS) }),
     ),
 
   captureCancel: () =>
     call<{ recording: boolean }>(
       "Cancel recording",
-      () => fetch(sidecarUrl("/capture/cancel"), { method: "POST" }),
+      () => fetch(sidecarUrl("/capture/cancel"), { method: "POST", signal: AbortSignal.timeout(TIMEOUT_MS) }),
     ),
 
   captureStop: () =>
     call<TranscribeResult>(
       "Transcription",
-      () => fetch(sidecarUrl("/capture/stop"), { method: "POST" }),
+      () => fetch(sidecarUrl("/capture/stop"), { method: "POST", signal: AbortSignal.timeout(LONG_TIMEOUT_MS) }),
     ),
 
   async captureStopAndSave(mode: RecordingMode): Promise<Note> {
@@ -408,6 +414,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ mode }),
+          signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
         }),
     );
     return fromServerNote(data);
@@ -433,6 +440,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     );
     return fromServerNote(data);
@@ -455,6 +463,7 @@ export const api = {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(patch),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     );
     return fromServerNote(data);
@@ -468,6 +477,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ folder_id: folderId }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     );
     return fromServerNote(data);
@@ -476,7 +486,7 @@ export const api = {
   async deleteNote(id: string): Promise<void> {
     let r: Response;
     try {
-      r = await fetch(sidecarUrl(`/notes/${id}`), { method: "DELETE" });
+      r = await fetch(sidecarUrl(`/notes/${id}`), { method: "DELETE", signal: AbortSignal.timeout(TIMEOUT_MS) });
     } catch (e) {
       throw new ApiError(friendly("Delete", 0, ""), 0, (e as Error)?.message);
     }
@@ -488,7 +498,7 @@ export const api = {
   async restoreNote(id: string): Promise<Note> {
     const data = await call<ServerNote>(
       "Undo delete",
-      () => fetch(sidecarUrl(`/notes/${id}/restore`), { method: "POST" }),
+      () => fetch(sidecarUrl(`/notes/${id}/restore`), { method: "POST", signal: AbortSignal.timeout(TIMEOUT_MS) }),
     );
     return fromServerNote(data);
   },
@@ -501,6 +511,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ids }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     );
     return data.deleted;
@@ -514,6 +525,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ids }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     );
     return data.notes.map(fromServerNote);
@@ -522,7 +534,7 @@ export const api = {
   async listTrash(): Promise<Note[]> {
     const data = await call<{ notes: ServerNote[] }>(
       "Loading trash",
-      () => fetch(sidecarUrl("/notes/trash")),
+      () => fetch(sidecarUrl("/notes/trash"), { signal: AbortSignal.timeout(TIMEOUT_MS) }),
     );
     return data.notes.map(fromServerNote);
   },
@@ -530,7 +542,7 @@ export const api = {
   async purgeNote(id: string): Promise<void> {
     let r: Response;
     try {
-      r = await fetch(sidecarUrl(`/notes/${id}/purge`), { method: "POST" });
+      r = await fetch(sidecarUrl(`/notes/${id}/purge`), { method: "POST", signal: AbortSignal.timeout(TIMEOUT_MS) });
     } catch (e) {
       throw new ApiError(friendly("Delete forever", 0, ""), 0, (e as Error)?.message);
     }
@@ -542,7 +554,7 @@ export const api = {
   emptyTrash: () =>
     call<{ purged: number }>(
       "Empty trash",
-      () => fetch(sidecarUrl("/notes/empty-trash"), { method: "POST" }),
+      () => fetch(sidecarUrl("/notes/empty-trash"), { method: "POST", signal: AbortSignal.timeout(TIMEOUT_MS) }),
     ),
 
   polish: (text: string, noteId?: string) =>
@@ -553,6 +565,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, note_id: noteId }),
+          signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
         }),
     ),
 
@@ -564,6 +577,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text }),
+          signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
         }),
     ),
 
@@ -575,13 +589,14 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, note_id: noteId }),
+          signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
         }),
     ),
 
   async extractTodos(noteId: string): Promise<Note> {
     const data = await call<ServerNote>(
       "Find action items",
-      () => fetch(sidecarUrl(`/notes/${noteId}/extract-todos`), { method: "POST" }),
+      () => fetch(sidecarUrl(`/notes/${noteId}/extract-todos`), { method: "POST", signal: AbortSignal.timeout(LONG_TIMEOUT_MS) }),
     );
     return fromServerNote(data);
   },
@@ -589,7 +604,7 @@ export const api = {
   async organizeNote(noteId: string): Promise<Note> {
     const data = await call<ServerNote>(
       "Organizing note",
-      () => fetch(sidecarUrl(`/notes/${noteId}/organize`), { method: "POST" }),
+      () => fetch(sidecarUrl(`/notes/${noteId}/organize`), { method: "POST", signal: AbortSignal.timeout(LONG_TIMEOUT_MS) }),
     );
     return fromServerNote(data);
   },
@@ -602,16 +617,17 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ dest }),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     ),
 
   getSettings: () =>
-    call<AppSettings>("Loading settings", () => fetch(sidecarUrl("/settings"))),
+    call<AppSettings>("Loading settings", () => fetch(sidecarUrl("/settings"), { signal: AbortSignal.timeout(TIMEOUT_MS) })),
 
   inputDevices: () =>
     call<{ devices: AudioInputDevice[]; selected: number | null }>(
       "Loading microphones",
-      () => fetch(sidecarUrl("/audio/input-devices")),
+      () => fetch(sidecarUrl("/audio/input-devices"), { signal: AbortSignal.timeout(TIMEOUT_MS) }),
     ),
 
   updateSettings: (
@@ -647,13 +663,14 @@ export const api = {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(patch),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
         }),
     ),
 
   reorganizeNotes: () =>
     call<{ organized: number }>(
       "Reorganize notes",
-      () => fetch(sidecarUrl("/notes/reorganize"), { method: "POST" }),
+      () => fetch(sidecarUrl("/notes/reorganize"), { method: "POST", signal: AbortSignal.timeout(LONG_TIMEOUT_MS) }),
     ),
 
   askNotes: (question: string) =>
@@ -664,6 +681,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question }),
+          signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
         }),
     ),
 
@@ -675,6 +693,7 @@ export const api = {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
+          signal: AbortSignal.timeout(LONG_TIMEOUT_MS),
         }),
     ),
 };

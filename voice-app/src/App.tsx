@@ -104,24 +104,28 @@ function App() {
   // sidecar restart would strand the frontend with stale sidecarUp=false
   // until full page reload.
   useEffect(() => {
+    let inFlight = false;
     const id = setInterval(async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
         const [h, captureStatus] = await Promise.all([
           api.health(),
           api.captureStatus().catch(() => null),
         ]);
         setSidecarUp(true);
-        if (h.model_ready) setModelReady(true);
-        else if (modelReady !== false) setModelReady(false);
+        setModelReady(h.model_ready);
         if (captureStatus && !capture.transcribing && !capture.capturePending) {
           capture.setNativeRecording(captureStatus.recording);
         }
       } catch {
         setSidecarUp(false);
+      } finally {
+        inFlight = false;
       }
     }, 5000);
     return () => clearInterval(id);
-  }, [capture.capturePending, capture.transcribing, modelReady]);
+  }, [capture.capturePending, capture.transcribing]);
 
   // SSE: live updates from the sidecar (notes created/updated/deleted by the
   // hotkey daemon, by another window, or by external tooling). The browser
