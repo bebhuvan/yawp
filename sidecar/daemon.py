@@ -345,23 +345,33 @@ def _clipboard_set(data: bytes) -> bool:
 
 
 def _active_window_prefers_terminal_paste() -> bool:
-    """X11 only: best-effort check of the focused window's class so we can use
+    """X11 only: best-effort check of the focused window metadata so we can use
     Ctrl+Shift+V in terminals. Returns False (→ Ctrl+V) when unknown."""
     if not HAS_XDOTOOL:
         return False
     values: list[str] = []
     try:
-        cls = subprocess.run(
-            ["xdotool", "getactivewindow", "getwindowclassname"],
-            capture_output=True, text=True, timeout=1.0,
-        )
         title = subprocess.run(
             ["xdotool", "getactivewindow", "getwindowname"],
             capture_output=True, text=True, timeout=1.0,
         )
+        pid = subprocess.run(
+            ["xdotool", "getactivewindow", "getwindowpid"],
+            capture_output=True, text=True, timeout=1.0,
+        )
     except (subprocess.SubprocessError, OSError):
         return False
-    values.extend([(cls.stdout or "").strip().lower(), (title.stdout or "").strip().lower()])
+    values.append((title.stdout or "").strip().lower())
+    window_pid = (pid.stdout or "").strip()
+    if window_pid.isdigit():
+        try:
+            proc = subprocess.run(
+                ["ps", "-p", window_pid, "-o", "comm=", "-o", "args="],
+                capture_output=True, text=True, timeout=1.0,
+            )
+            values.append((proc.stdout or "").strip().lower())
+        except (subprocess.SubprocessError, OSError):
+            pass
     return any(value and any(t in value for t in TERMINAL_PASTE_HINTS) for value in values)
 
 
@@ -386,8 +396,9 @@ def paste_via_clipboard(text: str) -> bool:
                 else ["wtype", "-M", "ctrl", "v", "-m", "ctrl"]
             )
         elif HAS_XDOTOOL:
-            cmd = ["xdotool", "key", "--clearmodifiers",
-                   "ctrl+shift+v" if terminal else "ctrl+v"]
+            shortcut = os.environ.get("YAWP_XDOTOOL_PASTE_SHORTCUT", "ctrl+shift+v")
+            log.info("clipboard paste via xdotool shortcut=%s", shortcut)
+            cmd = ["xdotool", "key", "--clearmodifiers", shortcut]
         else:
             return False
         subprocess.run(cmd, check=True, timeout=3)

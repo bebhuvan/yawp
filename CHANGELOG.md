@@ -2,6 +2,15 @@
 
 All notable changes to Yawp are documented here. Dates are absolute.
 
+## [0.2.4] — 2026-05-31
+
+### Fixed
+- **Paste mode in Zed/Codex terminal chatboxes.** `xdotool` clipboard paste now
+  defaults to `Ctrl+Shift+V`, avoiding Codex/Claude's plain-`Ctrl+V`
+  image-paste handler. The active-window detector also uses `getwindowpid` and
+  process-name matching because this machine's `xdotool` build does not support
+  window class lookup.
+
 ## [0.2.3] — 2026-05-31
 
 ### Changed
