@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import subprocess
+import os
 from types import SimpleNamespace
+
+os.environ.setdefault("PYNPUT_BACKEND", "dummy")
 
 import daemon
 
