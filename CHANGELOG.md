@@ -2,6 +2,16 @@
 
 All notable changes to Yawp are documented here. Dates are absolute.
 
+## [0.2.2] — 2026-05-31
+
+### Fixed
+- **Linux WebKit blank window after opening Settings or switching views.** Local installs now use the system-linked Tauri binary instead of the AppImage runtime that could leave WebKit helper processes without a live web process on this machine.
+- **Settings no longer performs an in-webview GitHub release fetch.** The update area now shows the installed version and opens releases externally, avoiding another WebKit-triggered blank-window path.
+
+### Changed
+- **Local reinstall is much faster.** `./install.sh` now builds frontend assets plus the release binary and skips deb/rpm/AppImage packaging. Use `scripts/release-check` for distributable bundles.
+- **Release assets prioritize the `.deb` installer.** The AppImage is not published for this release while the WebKit/GStreamer bundle path needs more hardening.
+
 ## [0.2.1] — 2026-05-29
 
 ### Fixed

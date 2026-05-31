@@ -61,15 +61,15 @@ jobs:
       - name: Run quality gate
         run: ./scripts/check
 
-      - name: Build Tauri bundles
+      - name: Build Debian installer
         working-directory: voice-app
-        run: npm run tauri build
+        run: npm run tauri build -- --bundles deb
 
       - name: Collect release artifacts
         run: |
           mkdir -p release-artifacts
-          find voice-app/src-tauri/target/release/bundle -type f \
-            \( -name "*.deb" -o -name "*.AppImage" \) \
+          find voice-app/src-tauri/target/release/bundle/deb -type f \
+            -name "*.deb" \
             -exec cp {} release-artifacts/ \;
           (cd release-artifacts && sha256sum * > SHA256SUMS)
 
@@ -83,7 +83,6 @@ jobs:
         with:
           files: |
             release-artifacts/*.deb
-            release-artifacts/*.AppImage
             release-artifacts/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true

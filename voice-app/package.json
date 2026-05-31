@@ -1,7 +1,7 @@
 {
   "name": "yawp-app",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Yawp — local-first voice dictation. Tauri + React frontend.",
   "license": "MIT",
   "type": "module",
