@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="$(node -p "require('$ROOT/voice-app/package.json').version")"
+BINARY="$ROOT/voice-app/src-tauri/target/release/yawp"
+BUNDLE_DIR="$ROOT/voice-app/src-tauri/target/release/bundle/appimage"
+APPDIR="$BUNDLE_DIR/Yawp.AppDir"
+APPIMAGE_PLUGIN="${APPIMAGE_PLUGIN:-$HOME/.cache/tauri/linuxdeploy-plugin-appimage.AppImage}"
+APPIMAGE_PLUGIN_URL="https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage"
+TARGET_APPIMAGE="$BUNDLE_DIR/Yawp_${VERSION}_amd64.AppImage"
+
+require_file() {
+  local path="$1"
+  local label="$2"
+
+  if [[ ! -f "$path" ]]; then
+    printf 'Missing %s: %s\n' "$label" "$path" >&2
+    exit 1
+  fi
+}
+
+if [[ ! -x "$BINARY" ]]; then
+  printf 'Missing release binary: %s\n' "$BINARY" >&2
+  printf 'Run `npm run tauri build -- --no-bundle` from voice-app first.\n' >&2
+  exit 1
+fi
+
+if [[ ! -f "$APPIMAGE_PLUGIN" ]]; then
+  mkdir -p "$(dirname "$APPIMAGE_PLUGIN")"
+  curl --fail --location --show-error --silent \
+    "$APPIMAGE_PLUGIN_URL" \
+    --output "$APPIMAGE_PLUGIN"
+fi
+
+chmod +x "$APPIMAGE_PLUGIN"
+
+rm -rf "$APPDIR"
+mkdir -p \
+  "$APPDIR/usr/bin" \
+  "$APPDIR/usr/share/applications" \
+  "$APPDIR/usr/share/icons/hicolor/32x32/apps" \
+  "$APPDIR/usr/share/icons/hicolor/128x128/apps"
+
+cp "$BINARY" "$APPDIR/usr/bin/yawp"
+chmod +x "$APPDIR/usr/bin/yawp"
+
+cat > "$APPDIR/AppRun" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+this_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export GDK_BACKEND="${GDK_BACKEND:-x11}"
+export WEBKIT_DISABLE_COMPOSITING_MODE="${WEBKIT_DISABLE_COMPOSITING_MODE:-1}"
+
+exec "$this_dir/usr/bin/yawp" "$@"
+EOF
+chmod +x "$APPDIR/AppRun"
+
+cat > "$APPDIR/Yawp.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Yawp
+Comment=Local-first voice dictation
+Exec=yawp
+Icon=yawp
+Terminal=false
+Categories=Utility;
+EOF
+cp "$APPDIR/Yawp.desktop" "$APPDIR/usr/share/applications/Yawp.desktop"
+
+require_file "$ROOT/voice-app/src-tauri/icons/32x32.png" "32px app icon"
+require_file "$ROOT/voice-app/src-tauri/icons/128x128.png" "128px app icon"
+
+cp "$ROOT/voice-app/src-tauri/icons/32x32.png" "$APPDIR/usr/share/icons/hicolor/32x32/apps/yawp.png"
+cp "$ROOT/voice-app/src-tauri/icons/128x128.png" "$APPDIR/usr/share/icons/hicolor/128x128/apps/yawp.png"
+cp "$ROOT/voice-app/src-tauri/icons/128x128.png" "$APPDIR/yawp.png"
+ln -sfn yawp.png "$APPDIR/.DirIcon"
+
+rm -f "$BUNDLE_DIR"/*.AppImage "$TARGET_APPIMAGE"
+
+printf 'Packaging system-linked AppImage\n'
+(
+  cd "$BUNDLE_DIR"
+  ARCH=x86_64 "$APPIMAGE_PLUGIN" --appdir "$APPDIR"
+)
+
+generated="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name '*x86_64.AppImage' | head -n 1)"
+if [[ -z "$generated" ]]; then
+  printf 'AppImage packaging did not produce an x86_64 AppImage in %s\n' "$BUNDLE_DIR" >&2
+  exit 1
+fi
+
+mv "$generated" "$TARGET_APPIMAGE"
+chmod +x "$TARGET_APPIMAGE"
+printf 'Created %s\n' "$TARGET_APPIMAGE"

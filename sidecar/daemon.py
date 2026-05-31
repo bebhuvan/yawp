@@ -85,12 +85,14 @@ HAS_XCLIP = shutil.which("xclip") is not None
 HAS_WLCOPY = shutil.which("wl-copy") is not None
 HAS_WLPASTE = shutil.which("wl-paste") is not None
 
-# Window classes (lowercased, substring-matched) that paste with Ctrl+Shift+V
-# rather than Ctrl+V. Used so clipboard-paste works in terminals too.
-TERMINAL_WM_CLASSES = (
+# Window classes/titles (lowercased, substring-matched) that paste with
+# Ctrl+Shift+V rather than Ctrl+V. Zed reports the editor window class even
+# when focus is inside its terminal; Codex/Claude CLIs interpret Ctrl+V as an
+# image-paste command, so they need terminal-style paste.
+TERMINAL_PASTE_HINTS = (
     "terminal", "konsole", "xterm", "alacritty", "kitty", "wezterm",
     "foot", "st-256color", "tilix", "rxvt", "urxvt", "hyper", "qterminal",
-    "termite", "terminator",
+    "termite", "terminator", "zed", "codex", "claude",
 )
 COMMAND_SOCKET = config.DATA_DIR / "daemon.sock"
 _CUE_EVENTS = {
@@ -342,20 +344,25 @@ def _clipboard_set(data: bytes) -> bool:
     return False
 
 
-def _active_window_is_terminal() -> bool:
+def _active_window_prefers_terminal_paste() -> bool:
     """X11 only: best-effort check of the focused window's class so we can use
     Ctrl+Shift+V in terminals. Returns False (→ Ctrl+V) when unknown."""
     if not HAS_XDOTOOL:
         return False
+    values: list[str] = []
     try:
-        out = subprocess.run(
+        cls = subprocess.run(
             ["xdotool", "getactivewindow", "getwindowclassname"],
+            capture_output=True, text=True, timeout=1.0,
+        )
+        title = subprocess.run(
+            ["xdotool", "getactivewindow", "getwindowname"],
             capture_output=True, text=True, timeout=1.0,
         )
     except (subprocess.SubprocessError, OSError):
         return False
-    cls = (out.stdout or "").strip().lower()
-    return bool(cls) and any(t in cls for t in TERMINAL_WM_CLASSES)
+    values.extend([(cls.stdout or "").strip().lower(), (title.stdout or "").strip().lower()])
+    return any(value and any(t in value for t in TERMINAL_PASTE_HINTS) for value in values)
 
 
 def paste_via_clipboard(text: str) -> bool:
@@ -370,7 +377,7 @@ def paste_via_clipboard(text: str) -> bool:
         return False
     time.sleep(0.06)  # let the new selection settle before pasting
 
-    terminal = (not wayland) and _active_window_is_terminal()
+    terminal = (not wayland) and _active_window_prefers_terminal_paste()
     try:
         if wayland and HAS_WTYPE:
             cmd = (

@@ -2,6 +2,17 @@
 
 All notable changes to Yawp are documented here. Dates are absolute.
 
+## [0.2.3] — 2026-05-31
+
+### Changed
+- **Linux AppImage is published again.** The release workflow now builds a system-linked AppImage from the release binary instead of using Tauri's bundled WebKit/GStreamer AppImage runtime. This keeps the AppImage launch path aligned with the local installer path that avoids the blank-window WebKit failure.
+
+### Fixed
+- **Paste mode in Zed terminals for Codex/Claude.** Clipboard paste now treats
+  Zed/Codex/Claude windows as terminal-style targets and sends `Ctrl+Shift+V`,
+  avoiding the CLI image-paste path that reports "no image on clipboard".
+- **Release automation now uploads both `.deb` and `.AppImage` assets.** The workflow packages the AppImage with a focused helper script and includes it in `SHA256SUMS`.
+
 ## [0.2.2] — 2026-05-31
 
 ### Fixed

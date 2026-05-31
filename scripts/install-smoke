@@ -25,6 +25,7 @@ for script in \
   scripts/uninstall \
   scripts/doctor \
   scripts/debug-bundle \
+  scripts/package-appimage \
   scripts/release-check
 do
   require_file "$script"

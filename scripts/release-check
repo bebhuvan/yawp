@@ -8,7 +8,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 printf '\n==> Tauri package build\n'
 (
   cd "$ROOT/voice-app"
-  npm run tauri build
+  npm run tauri build -- --bundles deb
 )
+
+printf '\n==> AppImage package build\n'
+"$ROOT/scripts/package-appimage"
 
 printf '\nRelease checks passed.\n'
