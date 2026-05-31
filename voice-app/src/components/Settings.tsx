@@ -10,23 +10,8 @@ import {
   type Diagnostics,
 } from "../lib/api";
 
-// GitHub repo (owner/name) — used for the update check and project links.
-const GITHUB_REPO = "bebhuvan/yawp";
 const PROJECT_URL = "https://bebhuvan.github.io/yawp/";
-const RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases`;
-
-function isNewerVersion(latest: string, current: string): boolean {
-  const parse = (v: string) =>
-    v.replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
-  const a = parse(latest);
-  const b = parse(current);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] ?? 0;
-    const y = b[i] ?? 0;
-    if (x !== y) return x > y;
-  }
-  return false;
-}
+const RELEASES_URL = "https://github.com/bebhuvan/yawp/releases";
 import {
   LOCAL_ASR_MODELS,
   localAsrModelOptions,
@@ -96,36 +81,14 @@ export function Settings({
     status: "checking" | "current" | "available" | "error";
     latest?: string;
   }>({ status: "checking" });
-  const [updateDismissed, setUpdateDismissed] = useState(false);
-
-  const checkUpdate = async () => {
-    setUpdateInfo({ status: "checking" });
-    try {
-      let current = appVersion;
-      if (!current) {
-        current = await getVersion();
-        setAppVersion(current);
-      }
-      const res = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-        { headers: { Accept: "application/vnd.github+json" } },
-      );
-      if (!res.ok) throw new Error(String(res.status));
-      const data = await res.json();
-      const latest = String(data.tag_name || "").replace(/^v/, "");
-      if (latest && isNewerVersion(latest, current)) {
-        setUpdateInfo({ status: "available", latest });
-        setUpdateDismissed(false);
-      } else {
-        setUpdateInfo({ status: "current" });
-      }
-    } catch {
-      setUpdateInfo({ status: "error" });
-    }
-  };
 
   useEffect(() => {
-    void checkUpdate();
+    void getVersion()
+      .then((version) => {
+        setAppVersion(version);
+        setUpdateInfo({ status: "current" });
+      })
+      .catch(() => setUpdateInfo({ status: "error" }));
   }, []);
 
   const refreshDiagnostics = async () => {
@@ -230,56 +193,6 @@ export function Settings({
 
   return (
     <div className="page-in mx-auto max-w-[700px] px-12 pb-32">
-      {updateInfo.status === "available" && !updateDismissed && (
-        <div
-          className="item-in mt-2 mb-12 flex items-center gap-4 rounded-lg px-5 py-4"
-          style={{
-            background: "var(--color-accent-soft)",
-            border: "1px solid var(--color-accent)",
-          }}
-        >
-          <span
-            className="pulse-ink shrink-0"
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: "var(--color-accent)",
-            }}
-            aria-hidden
-          />
-          <div className="min-w-0 flex-1">
-            <p
-              className="display-tight text-[16px]"
-              style={{ letterSpacing: "-0.018em", color: "var(--color-accent-ink)" }}
-            >
-              Yawp {updateInfo.latest} is available
-            </p>
-            <p
-              className="mt-0.5 font-serif text-[13.5px] italic"
-              style={{ lineHeight: 1.5, color: "var(--color-ink-soft)" }}
-            >
-              You're on {appVersion || "an older version"}. See what's changed and grab the update.
-            </p>
-          </div>
-          <button
-            onClick={() => void openUrl(RELEASES_URL)}
-            className="eyebrow shrink-0 cursor-pointer transition-opacity hover:opacity-70"
-            style={{ color: "var(--color-accent-ink)" }}
-          >
-            View release ↗
-          </button>
-          <button
-            onClick={() => setUpdateDismissed(true)}
-            aria-label="Dismiss update notice"
-            className="shrink-0 cursor-pointer text-[18px] leading-none transition-opacity hover:opacity-70"
-            style={{ color: "var(--color-ink-quiet)" }}
-          >
-            ×
-          </button>
-        </div>
-      )}
-
       <Section
         index={1}
         title="Transcription"
@@ -679,33 +592,19 @@ export function Settings({
             >
               {appVersion ? `Yawp v${appVersion} — ` : ""}
               {updateInfo.status === "checking"
-                ? "checking…"
+                ? "loading version."
                 : updateInfo.status === "available"
-                  ? `version ${updateInfo.latest} is available.`
+                  ? "release page available."
                   : updateInfo.status === "error"
-                    ? "couldn't reach GitHub to check."
-                    : "you're up to date."}
+                    ? "version unavailable."
+                    : "release notes open in your browser."}
             </p>
           </div>
           <button
-            onClick={() =>
-              updateInfo.status === "available"
-                ? void openUrl(RELEASES_URL)
-                : void checkUpdate()
-            }
-            disabled={updateInfo.status === "checking"}
+            onClick={() => void openUrl(RELEASES_URL)}
             className="pill-control eyebrow cursor-pointer px-4 transition-colors hover:text-ink disabled:opacity-50"
-            style={
-              updateInfo.status === "available"
-                ? { color: "var(--color-accent)", borderColor: "var(--color-accent)" }
-                : undefined
-            }
           >
-            {updateInfo.status === "available"
-              ? "Get the update ↗"
-              : updateInfo.status === "checking"
-                ? "Checking…"
-                : "Check for updates"}
+            View releases ↗
           </button>
         </div>
         <RuntimeDiagnostics

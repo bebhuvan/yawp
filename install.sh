@@ -107,29 +107,30 @@ if [[ -n "$DEB" ]] && command -v sudo >/dev/null && (( $(id -u) <= 999999 )) && 
   fi
 else
   if [[ -z "$DEB" ]]; then
-    warn "No .deb produced — using AppImage."
+    warn "No .deb produced — using local binary."
   elif ! command -v sudo >/dev/null; then
-    warn "sudo not available — using AppImage (no root needed)."
+    warn "sudo not available — using local binary (no root needed)."
   else
-    warn "Your uid/gid is too large for the .deb format — using AppImage."
+    warn "Your uid/gid is too large for the .deb format — using local binary."
   fi
   USE_APPIMAGE=1
 fi
 
 if (( USE_APPIMAGE )); then
-  if [[ -z "$APPIMAGE" ]]; then
-    fail "Build produced no AppImage either — check the output above."
+  BIN="$APP/src-tauri/target/release/yawp"
+  if [[ ! -x "$BIN" ]]; then
+    fail "Build produced no Yawp binary — check the output above."
   fi
-  step "Installing $APPIMAGE → ~/.local/bin/Yawp.AppImage"
+  step "Installing $BIN → ~/.local/bin/Yawp"
   mkdir -p "$HOME/.local/bin" \
            "$HOME/.local/share/applications" \
            "$HOME/.local/share/icons/hicolor/256x256/apps"
   # Atomic replace via a temp file + rename, so a re-install succeeds even while
-  # the current Yawp is running (a plain `cp` over a running AppImage fails with
-  # "Text file busy"). The live process keeps its old copy until relaunch.
-  cp "$APPIMAGE" "$HOME/.local/bin/Yawp.AppImage.new"
-  chmod +x "$HOME/.local/bin/Yawp.AppImage.new"
-  mv -f "$HOME/.local/bin/Yawp.AppImage.new" "$HOME/.local/bin/Yawp.AppImage"
+  # the current Yawp is running. The live process keeps its old copy until
+  # relaunch.
+  cp "$BIN" "$HOME/.local/bin/Yawp.new"
+  chmod +x "$HOME/.local/bin/Yawp.new"
+  mv -f "$HOME/.local/bin/Yawp.new" "$HOME/.local/bin/Yawp"
   cp "$APP/src-tauri/icons/128x128@2x.png" \
      "$HOME/.local/share/icons/hicolor/256x256/apps/yawp.png"
   cat > "$HOME/.local/share/applications/yawp.desktop" <<DESKTOP
@@ -137,7 +138,7 @@ if (( USE_APPIMAGE )); then
 Type=Application
 Name=Yawp
 Comment=Local-first voice dictation
-Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 GDK_BACKEND=x11 $HOME/.local/bin/Yawp.AppImage %U
+Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 GDK_BACKEND=x11 $HOME/.local/bin/Yawp %U
 Icon=yawp
 Terminal=false
 Categories=Utility;AudioVideo;

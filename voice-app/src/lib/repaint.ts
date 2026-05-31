@@ -1,15 +1,28 @@
-export function installWebkitRepaintRecovery() {
-  // Flush any pending WebKit layout so the compositor has fresh content to
-  // blit. Avoid the previous opacity:0.999 trick — with
-  // WEBKIT_DISABLE_COMPOSITING_MODE=1 that forced a new compositing layer on
-  // a disabled compositing path, which made blanks worse, not better.
-  const poke = () => {
-    requestAnimationFrame(() => void document.documentElement.offsetHeight);
-  };
+import { emit } from "@tauri-apps/api/event";
 
-  window.addEventListener("focus", poke);
-  window.addEventListener("pageshow", poke);
+let repaintPending = false;
+
+export function requestNativeRepaint() {
+  if (repaintPending) return;
+  repaintPending = true;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      repaintPending = false;
+      void document.documentElement.offsetHeight;
+      void emit("yawp-repaint").catch(() => {
+        // Browser/dev preview: no Tauri event bridge is available.
+      });
+    });
+  });
+}
+
+export function installWebkitRepaintRecovery() {
+  // Flush WebKit layout and ask the native shell for a real GTK repaint.
+  // Avoid the previous opacity:0.999 trick: with software compositing it forced
+  // a new layer on the path that was already blanking.
+  window.addEventListener("focus", requestNativeRepaint);
+  window.addEventListener("pageshow", requestNativeRepaint);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) poke();
+    if (!document.hidden) requestNativeRepaint();
   });
 }

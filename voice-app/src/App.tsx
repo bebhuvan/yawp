@@ -19,6 +19,7 @@ import {
 import { writeToClipboard } from "./lib/clipboard";
 import { makeLogger } from "./lib/log";
 import { removeNote, replaceExistingNote, upsertNote } from "./lib/noteState";
+import { requestNativeRepaint } from "./lib/repaint";
 import { useNativeCapture } from "./lib/useNativeCapture";
 import { useNoteSearch } from "./lib/useNoteSearch";
 import type { Folder, Note, RecordingMode } from "./lib/types";
@@ -53,6 +54,10 @@ function App() {
   const search = useNoteSearch(notes);
   const capture = useNativeCapture({ sidecarUp, setSidecarUp, showToast });
   const flow = capture.flow;
+
+  useEffect(() => {
+    requestNativeRepaint();
+  }, [loading, openId, view]);
 
   // Initial load
   useEffect(() => {

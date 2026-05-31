@@ -36,12 +36,10 @@ toggle-paste, cancel, reload, restart, and logs."
     //    accelerated compositing intact.
     //  - WEBKIT_DISABLE_COMPOSITING_MODE was previously set here to prevent
     //    WebKitGTK from losing its backing buffer on occlusion/sleep. It was
-    //    removed because forcing software rendering caused the GTK main loop to
-    //    block for hundreds of milliseconds on every focus-in (queue_resize on
-    //    a software-rendered page), making the app appear frozen on every click.
-    //    With GPU compositing enabled, focus-in repaints are a cheap GPU blit.
-    //    If backing-buffer loss reappears, the force_repaint on show_main_window
-    //    and the async queue_draw on Focused(true) handle recovery.
+    //    removed because forcing software rendering made the GTK main loop block
+    //    during repaint recovery. With GPU compositing enabled, a queue_resize()
+    //    based recovery forces WebKit to render a fresh backing buffer without
+    //    resizing the OS window.
     //  - GDK_BACKEND=x11: the GTK/WebKit Wayland backend crashes under Tauri
     //    (tauri#8541); force X11/XWayland everywhere, as Handy does.
     #[cfg(target_os = "linux")]
@@ -62,19 +60,15 @@ toggle-paste, cancel, reload, restart, and logs."
                     api.prevent_close();
                     let _ = window.hide();
                 }
-                // On focus-in, ask WebKit to reblit its existing GPU surface.
-                // queue_draw() alone is sufficient here — with GPU compositing
-                // the backing texture survives normal occlusion, so this is a
-                // cheap blit rather than a full re-layout. We still do the
-                // heavier force_repaint (queue_resize + queue_draw) in
-                // show_main_window for the tray-restore path where the GTK
-                // widget was truly unmapped and the surface may be stale.
+                // On focus-in, force WebKit to allocate and paint fresh content.
+                // queue_draw() alone reblits a stale/blank backing buffer after
+                // some occlusion and app-switch paths on WebKitGTK.
                 tauri::WindowEvent::Focused(true) => {
                     let handle = window.app_handle().clone();
                     let label = window.label().to_string();
                     tauri::async_runtime::spawn(async move {
                         if let Some(w) = handle.get_webview_window(&label) {
-                            light_repaint(&w);
+                            force_repaint(&w);
                         }
                     });
                 }
@@ -134,6 +128,13 @@ toggle-paste, cancel, reload, restart, and logs."
                         });
                     });
                 }
+
+                let repaint_handle = app.handle().clone();
+                app.listen_any("yawp-repaint", move |_event| {
+                    if let Some(window) = repaint_handle.get_webview_window("main") {
+                        force_repaint(&window);
+                    }
+                });
             }
             Ok(())
         })
@@ -167,21 +168,6 @@ fn force_repaint<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
 
 #[cfg(not(target_os = "linux"))]
 fn force_repaint<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>) {}
-
-// Lightweight repaint — reblits WebKit's existing GPU surface. With GPU
-// compositing the texture survives normal focus changes, so this is just a
-// cheap blit with no re-layout. Used on every focus-in event to avoid
-// blocking the GTK main loop with an expensive queue_resize.
-#[cfg(target_os = "linux")]
-fn light_repaint<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
-    use gtk::prelude::WidgetExt;
-    let _ = window.with_webview(|webview| {
-        webview.inner().queue_draw();
-    });
-}
-
-#[cfg(not(target_os = "linux"))]
-fn light_repaint<R: tauri::Runtime>(_window: &tauri::WebviewWindow<R>) {}
 
 fn build_tray<R, M>(manager: &M) -> tauri::Result<tauri::tray::TrayIcon<R>>
 where
