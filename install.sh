@@ -85,55 +85,33 @@ else
   step "Frontend deps already installed (skipping)"
 fi
 
-# --- 4. Build Tauri bundle -----------------------------------------------
-step "Building Yawp (first Rust compile takes 3–5 minutes)"
-(cd "$APP" && npm run tauri build)
+# --- 4. Build + install local app ----------------------------------------
+# Local installs use the system-linked Tauri binary. This avoids the
+# WebKit/GStreamer crashes seen from the AppImage bundle on some Linux stacks
+# and skips slow deb/rpm/AppImage packaging. Use scripts/release-check when you
+# explicitly need distributable bundles.
+step "Building Yawp local binary"
+(cd "$APP" && npm run build)
+(cd "$APP/src-tauri" && cargo build --release)
 
-DEB=$(ls -t "$APP/src-tauri/target/release/bundle/deb/"*.deb 2>/dev/null | head -1)
-APPIMAGE=$(ls -t "$APP/src-tauri/target/release/bundle/appimage/"*.AppImage 2>/dev/null | head -1)
-
-# Prefer the .deb when it works, but the .deb format's 6-byte uid/gid fields
-# overflow on systems where the user's uid is more than 6 digits (corporate
-# LDAP-style ids). Detect that and fall back to the AppImage.
-USE_APPIMAGE=0
-if [[ -n "$DEB" ]] && command -v sudo >/dev/null && (( $(id -u) <= 999999 )) && (( $(id -g) <= 999999 )); then
-  step "Installing $DEB (sudo)"
-  if ! sudo dpkg -i "$DEB"; then
-    sudo apt-get install -fy || true
-    if ! dpkg -s yawp >/dev/null 2>&1; then
-      warn ".deb install failed — falling back to AppImage."
-      USE_APPIMAGE=1
-    fi
-  fi
-else
-  if [[ -z "$DEB" ]]; then
-    warn "No .deb produced — using local binary."
-  elif ! command -v sudo >/dev/null; then
-    warn "sudo not available — using local binary (no root needed)."
-  else
-    warn "Your uid/gid is too large for the .deb format — using local binary."
-  fi
-  USE_APPIMAGE=1
+BIN="$APP/src-tauri/target/release/yawp"
+if [[ ! -x "$BIN" ]]; then
+  fail "Build produced no Yawp binary — check the output above."
 fi
 
-if (( USE_APPIMAGE )); then
-  BIN="$APP/src-tauri/target/release/yawp"
-  if [[ ! -x "$BIN" ]]; then
-    fail "Build produced no Yawp binary — check the output above."
-  fi
-  step "Installing $BIN → ~/.local/bin/Yawp"
-  mkdir -p "$HOME/.local/bin" \
-           "$HOME/.local/share/applications" \
-           "$HOME/.local/share/icons/hicolor/256x256/apps"
-  # Atomic replace via a temp file + rename, so a re-install succeeds even while
-  # the current Yawp is running. The live process keeps its old copy until
-  # relaunch.
-  cp "$BIN" "$HOME/.local/bin/Yawp.new"
-  chmod +x "$HOME/.local/bin/Yawp.new"
-  mv -f "$HOME/.local/bin/Yawp.new" "$HOME/.local/bin/Yawp"
-  cp "$APP/src-tauri/icons/128x128@2x.png" \
-     "$HOME/.local/share/icons/hicolor/256x256/apps/yawp.png"
-  cat > "$HOME/.local/share/applications/yawp.desktop" <<DESKTOP
+step "Installing $BIN → ~/.local/bin/Yawp"
+mkdir -p "$HOME/.local/bin" \
+         "$HOME/.local/share/applications" \
+         "$HOME/.local/share/icons/hicolor/256x256/apps"
+# Atomic replace via a temp file + rename, so a re-install succeeds even while
+# the current Yawp is running. The live process keeps its old copy until
+# relaunch.
+cp "$BIN" "$HOME/.local/bin/Yawp.new"
+chmod +x "$HOME/.local/bin/Yawp.new"
+mv -f "$HOME/.local/bin/Yawp.new" "$HOME/.local/bin/Yawp"
+cp "$APP/src-tauri/icons/128x128@2x.png" \
+   "$HOME/.local/share/icons/hicolor/256x256/apps/yawp.png"
+cat > "$HOME/.local/share/applications/yawp.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=Yawp
@@ -145,9 +123,8 @@ Categories=Utility;AudioVideo;
 StartupNotify=true
 StartupWMClass=Yawp
 DESKTOP
-  update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
-  gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
-fi
+update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
 
 # Install the operational CLI regardless of bundle type. It points back to this
 # checkout, matching the sidecar service units below.
